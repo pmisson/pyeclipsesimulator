@@ -33,6 +33,7 @@ from matplotlib.patches import Circle
 import sys, webbrowser, os, requests
 from geopy.geocoders import Nominatim
 import time as pytime
+from matplotlib.patches import Ellipse
 
 # Para descargar catálogo de estrellas desde Vizier
 from astroquery.vizier import Vizier
@@ -47,32 +48,44 @@ R_MOON = 1737.4          # km
 
 # --- Lista de capitales de provincia en España ---
 capitales = {
-    "Madrid": (40.4165, -3.70256),
-    "Barcelona": (41.3888, 2.159),
-    "Valencia": (39.4699, -0.3763),
-    "Sevilla": (37.3886, -5.9823),
-    "Zaragoza": (41.6488, -0.8891),
-    "Málaga": (36.7202, -4.4203),
-    "Murcia": (37.9834, -1.1299),
-    "Palma de Mallorca": (39.5696, 2.6502),
-    "Las Palmas de Gran Canaria": (28.1235, -15.4363),
+    "Alcalá de Henares": (40.48198, -3.36354),
+    "Alcobendas": (40.54746, -3.64197),
+    "Avilés": (43.55694, -5.92483),
+    "Benavente": (42.00282, -5.67889),
     "Bilbao": (43.263, -2.934),
-    "Alicante": (38.3452, -0.481),
-    "Córdoba": (37.8882, -4.7794),
-    "Valladolid": (41.6528, -4.7245),
-    "Vigo": (42.2406, -8.7207),
+    "Burgos": (42.34399, -3.69691),
+    "Castellón de la Plana": (39.98641, -0.03688),
+    "Cuenca": (40.07039, -2.13742),
+    "Ferrol": (43.48333, -8.23333),
     "Gijón": (43.5357, -5.6615),
-    "L'Hospitalet de Llobregat": (41.3596, 2.0999),
+    "Guadalajara": (40.63333, -3.16667),
+    "Ibiza": (38.90883, 1.43296),
     "A Coruña": (43.3713, -8.396),
-    "Granada": (37.1765, -3.5979),
-    "Vitoria-Gasteiz": (42.8467, -2.6716),
-    "Elche": (38.2699, -0.7126),
+    "León": (42.59873, -5.5671),
+    "Lleida": (41.61759, 0.62001),
+    "Logroño": (42.46645, -2.44566),
+    "Lugo": (43.00913, -7.55817),
+    "Menorca": (39.94961, 4.11045),
     "Oviedo": (43.3603, -5.8448),
-    "Santa Cruz de Tenerife": (28.4636, -16.2518),
-    "Badalona": (41.4494, 2.2474),
-    "Cartagena": (37.6079, -0.9913),
+    "Palencia": (42.00955, -4.52717),
+    "Palma": (39.5696, 2.6502),
+    "Portugalete": (43.32082, -3.02064),
+    "Reus": (41.15612, 1.10687),
+    "San Sebastián de los Reyes": (40.54539, -3.62793),
+    "Santander": (43.46298, -3.80475),
+    "Barakaldo": (43.29564, -2.99735),
+    "Segovia": (40.94808, -4.11839),
+    "Soria": (41.76328, -2.46625),
     "Tarragona": (41.1189, 1.2445),
+    "Torrejón de Ardoz": (40.45676, -3.4755),
+    "Torrent": (39.43701, -0.46536),
+    "Valencia": (39.4699, -0.3763),
+    "Valladolid": (41.6528, -4.7245),
+    "Vitoria-Gasteiz": (42.8467, -2.6716),
+    "Zamora": (41.50332, -5.74456),
+    "Zaragoza": (41.6488, -0.8891)
 }
+
 
 # --- Función para obtener altitud automáticamente usando Open‑Meteo ---
 def obtener_altitud(lat, lon):
@@ -111,7 +124,9 @@ def reverse_geocode(lat, lon):
         return "Error"
 
 # --- Función para descargar automáticamente catálogo de estrellas desde Vizier ---
-def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=6.5):
+def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=10):
+    # Convierte center_coord a ICRS
+    center_coord = SkyCoord(ra=center_coord.ra, dec=center_coord.dec, unit='deg', frame='icrs')
     Vizier.ROW_LIMIT = -1
     columns = ["RA_ICRS", "DE_ICRS", "Gmag"]
     vizier = Vizier(columns=columns, row_limit=-1)
@@ -480,12 +495,25 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
     def update(frame):
         obstime = tiempos[frame]
         altaz_frame = AltAz(obstime=obstime, location=location)
+        
+        # --- 🌑 CAMBIO DE FONDO DURANTE TOTALIDAD 🌑 ---
+        if t_total_range is not None:
+            t_start, t_end = t_total_range
+            if t_start <= obstime <= t_end:
+                ax1.set_facecolor('black')  # Fondo negro en totalidad
+                ax2.set_facecolor('black')
+            else:
+                ax1.set_facecolor('white')  # Vuelve a blanco fuera de totalidad
+                ax2.set_facecolor('white')
+        
+        
         # Sin refracción
         sun_coord = get_sun(obstime)
         d_sun = sun_coord.distance.to(u.km).value
         sol_diam = angular_diameter(R_SUN, d_sun)
         sun_radius = sol_diam / 2.0
         sun_patch1.set_radius(sun_radius)
+        sun_patch2.set_radius(sun_radius)
         sol = sun_coord.transform_to(altaz_frame)
         luna = get_moon(obstime, location=location).transform_to(altaz_frame)
         d_az = (luna.az - sol.az).to(u.deg).value
@@ -520,20 +548,93 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
             else:
                 horizon_line1.set_data([], [])
 
-        # Con refracción:
-        alt_sol = sol.alt.to(u.deg).value
-        az_sol = sol.az.to(u.deg).value
+        # --- PANEL CON REFRACCIÓN ---
+
+        # Importante: asegúrate de haber importado Ellipse:
+        # from matplotlib.patches import Ellipse
+
+        # --- Para el Sol (patch: sun_patch2) ---
+
+        # Se asume que 'sun_patch2' ya fue creado previamente de la siguiente forma:
+        # sun_patch2 = Ellipse((0, 0), width=2, height=2, facecolor='gold', alpha=0.6, edgecolor='darkgoldenrod', lw=1.5)
+        # ax2.add_patch(sun_patch2)
+
+        # Obtener el objeto del Sol y su distancia real
+        #sol = get_sun(obstime)
+        d_sun = sol.distance.to(u.km).value
+        sol_diam = angular_diameter(R_SUN, d_sun)  # Diámetro angular en grados
+        sun_radius = sol_diam / 2.0                # Radio angular en grados
+
+        # Definir el sistema AltAz y transformar la posición del Sol
+        altaz_frame = AltAz(obstime=obstime, location=location)
+        sol_altaz = sol.transform_to(altaz_frame)
+        alt_sol = sol_altaz.alt.to(u.deg).value
+        az_sol = sol_altaz.az.to(u.deg).value
+
+        # Aplicar refracción al centro del Sol
         sol_eff_alt, sol_eff_az = aplicar_refraction(alt_sol, az_sol, d_sun, Refraction_inst, lmbda)
+
+        # Calcular la posición refractada para el borde superior e inferior del disco solar:
+        alt_top = alt_sol + sun_radius
+        alt_top_eff, _ = aplicar_refraction(alt_top, az_sol, d_sun, Refraction_inst, lmbda)
+        alt_bot = alt_sol - sun_radius
+        alt_bot_eff, _ = aplicar_refraction(alt_bot, az_sol, d_sun, Refraction_inst, lmbda)
+
+        # El diámetro vertical efectivo es la diferencia entre las posiciones refractadas
+        sol_diam_vert_eff = alt_top_eff - alt_bot_eff
+        # Se deja el diámetro horizontal igual que el original
+        sol_diam_horiz = sol_diam
+
+        # Actualizar el patch del Sol (sun_patch2)
+        # Se asume que en el diagrama se usan unidades relativas al Sol, por ello se centra en (0,0)
+        sun_patch2.center = (0, 0)
+        sun_patch2.width = sol_diam_horiz
+        sun_patch2.height = sol_diam_vert_eff
+        sun_patch2.angle = 0  # Se puede modificar si se desea rotar la elipse
+
+        # --- Para la Luna (patch: moon_patch2) ---
+
+        # Se asume que 'moon_patch2' ha sido creado previamente como:
+        # moon_patch2 = Ellipse((0, 0), width=1, height=1, facecolor='silver', alpha=0.6, edgecolor='dimgray', lw=1.5)
+        # ax2.add_patch(moon_patch2)
+
+        # Obtener la posición original de la Luna en AltAz
+        luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+        d_luna = luna.distance.to(u.km).value
+        luna_diam = angular_diameter(R_MOON, d_luna)  # Diámetro angular en grados
+        luna_radius = luna_diam / 2.0                 # Radio angular en grados
+
         alt_luna = luna.alt.to(u.deg).value
         az_luna = luna.az.to(u.deg).value
-        d_luna_val = luna.distance.to(u.km).value
-        luna_eff_alt, luna_eff_az = aplicar_refraction(alt_luna, az_luna, d_luna_val, Refraction_inst, lmbda)
+
+        # Aplicar refracción al centro de la Luna
+        luna_eff_alt, luna_eff_az = aplicar_refraction(alt_luna, az_luna, d_luna, Refraction_inst, lmbda)
+
+        # Calcular la posición refractada para la parte superior e inferior del disco lunar
+        alt_top_luna = alt_luna + luna_radius
+        alt_top_luna_eff, _ = aplicar_refraction(alt_top_luna, az_luna, d_luna, Refraction_inst, lmbda)
+        alt_bot_luna = alt_luna - luna_radius
+        alt_bot_luna_eff, _ = aplicar_refraction(alt_bot_luna, az_luna, d_luna, Refraction_inst, lmbda)
+
+        # El diámetro vertical efectivo para la Luna
+        luna_diam_vert_eff = alt_top_luna_eff - alt_bot_luna_eff
+        # Se deja el diámetro horizontal igual que el original
+        luna_diam_horiz = luna_diam
+
+        # Para situar la Luna en el diagrama, se calcula su posición relativa respecto al Sol refractado
         d_az_eff = (luna_eff_az - sol_eff_az)
         d_x_eff = d_az_eff * np.cos(np.deg2rad(sol_eff_alt))
         d_y_eff = luna_eff_alt - sol_eff_alt
+
+        # Actualizar el patch de la Luna (moon_patch2)
         moon_patch2.center = (d_x_eff, d_y_eff)
-        moon_patch2.set_radius(moon_radius)
+        moon_patch2.width = luna_diam_horiz
+        moon_patch2.height = luna_diam_vert_eff
+        moon_patch2.angle = 0  # Se puede ajustar si se desea rotar la elipse
+
+        # Actualizar el texto de tiempo
         time_text2.set_text(f"UT:\n{obstime.iso}")
+
 
         if horizon_data is not None:
             pts2 = []
@@ -560,40 +661,48 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
         if star_catalog_data is not None and t_total_range is not None:
             t_start, t_end = t_total_range
             if t_start <= obstime <= t_end:
+                ax1.set_facecolor('black')  # Fondo negro en totalidad
+                ax2.set_facecolor('black')
+
                 for star in star_catalog_data:
                     ra, dec, mag = star
-                    if mag > 6.5:
-                        continue
+                    #if mag < 10:
+                    #    continue
                     coord = SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame='icrs')
                     coord_altaz = coord.transform_to(AltAz(obstime=obstime, location=location))
-                    if coord_altaz.alt.deg < 0:
-                        continue
-                    sol_az_deg = sol.az.to(u.deg).value
-                    sol_alt_deg = sol.alt.to(u.deg).value
-                    d_az_star = ((coord_altaz.az.deg - sol_az_deg + 180) % 360) - 180
-                    x_star = d_az_star * np.cos(sol.alt.radian)
-                    y_star = coord_altaz.alt.deg - sol_alt_deg
-                    stars_x1.append(x_star)
-                    stars_y1.append(y_star)
-                    size = max(1, (7 - mag) * 3)
-                    stars_sizes1.append(size)
+                    if coord_altaz.alt.deg > 0:
+                        sol = sun_coord.transform_to(altaz_frame)
+                        sol_az_deg = az_sol
+                        sol_alt_deg = alt_sol
+                        d_az_star = ((coord_altaz.az.deg - sol_az_deg + 180) % 360) - 180
+                        x_star = d_az_star * np.cos(sol.alt.radian)
+                        y_star = coord_altaz.alt.deg - sol_alt_deg
+                        stars_x1.append(x_star)
+                        stars_y1.append(y_star)
+                        size = max(1, (7 - mag) * 3)
+                        stars_sizes1.append(size)
+                        
+                        sol_eff_az_deg = sol_eff_az
+                        sol_eff_alt_deg = sol_eff_alt
+                        d_az_star_eff = ((coord_altaz.az.deg - sol_eff_az_deg + 180) % 360) - 180
+                        x_star_eff = d_az_star_eff * np.cos(np.deg2rad(sol_eff_alt_deg))
+                        y_star_eff = coord_altaz.alt.deg - sol_eff_alt_deg
+                        stars_x2.append(x_star_eff)
+                        stars_y2.append(y_star_eff)
+                        stars_sizes2.append(size)
                     
-                    sol_eff_az_deg = sol_eff_az
-                    sol_eff_alt_deg = sol_eff_alt
-                    d_az_star_eff = ((coord_altaz.az.deg - sol_eff_az_deg + 180) % 360) - 180
-                    x_star_eff = d_az_star_eff * np.cos(np.deg2rad(sol_eff_alt_deg))
-                    y_star_eff = coord_altaz.alt.deg - sol_eff_alt_deg
-                    stars_x2.append(x_star_eff)
-                    stars_y2.append(y_star_eff)
-                    stars_sizes2.append(size)
+            else:
+                ax1.set_facecolor('white')  # Vuelve a blanco fuera de totalidad
+                ax2.set_facecolor('white')
+            
         stars_scatter1.set_offsets(np.column_stack((stars_x1, stars_y1)))
         stars_scatter1.set_sizes(stars_sizes1)
         stars_scatter2.set_offsets(np.column_stack((stars_x2, stars_y2)))
         stars_scatter2.set_sizes(stars_sizes2)
         
         return (moon_patch1, time_text1, horizon_line1, stars_scatter1,
-                moon_patch2, time_text2, horizon_line2, stars_scatter2)
-
+                moon_patch2, time_text2, horizon_line2, stars_scatter2,ax1,ax2)
+    update(0)
     ani = animation.FuncAnimation(fig, update, frames=len(tiempos),
                                   init_func=init, blit=True, interval=200, repeat=True)
     plt.show()
@@ -616,7 +725,7 @@ def seleccionar_localizacion():
     print("Seleccione la forma de indicar la localización:")
     print("1. Escribir el nombre de un municipio o lugar")
     print("2. Ingresar coordenadas manualmente")
-    print("3. Seleccionar de una lista de capitales de provincia (España)")
+    print("3. Seleccionar de una lista de capitales de provincia y otras ciudades relevantes (España)")
     try:
         opcion = int(input("Ingrese el número de la opción deseada: "))
     except:
@@ -663,8 +772,9 @@ def seleccionar_localizacion():
         return seleccionar_localizacion()
 
 # --- Función para descargar el catálogo de estrellas automáticamente ---
-def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=6.5):
+def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=10):
     Vizier.ROW_LIMIT = -1
+    center_coord = SkyCoord(ra=center_coord.ra, dec=center_coord.dec, unit='deg', frame='icrs')
     columns = ["RA_ICRS", "DE_ICRS", "Gmag"]
     vizier = Vizier(columns=columns, row_limit=-1)
     try:
@@ -715,6 +825,29 @@ def main():
     duracion = float(duracion_str)
 
     location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
+    
+        # Opción de horizonte artificial (PeakFinder)
+    resp_horizonte_artif = input("\n¿Desea ver el horizonte artificial (PeakFinder)? (s/n): ").strip().lower()
+    if resp_horizonte_artif == 's':
+        if "Máximo Eclipse" in eventos:
+            def_azi = eventos["Máximo Eclipse"].get("az_sol", None)
+            def_alt = eventos["Máximo Eclipse"].get("alt_sol", None)
+        else:
+            def_azi, def_alt = None, None
+        print("Puede ajustar manualmente azimut y altitud para la vista del horizonte artificial.")
+        azi_str = input(f"Ingrese azimut (°) [default: {def_azi if def_azi is not None else 'sin ajustar'}]: ")
+        alt_str = input(f"Ingrese altitud (°) [default: {def_alt if def_alt is not None else 'sin ajustar'}]: ")
+        try:
+            azi_val = float(azi_str) if azi_str.strip() != "" else def_azi
+        except:
+            azi_val = def_azi
+        try:
+            alt_val = float(alt_str) if alt_str.strip() != "" else def_alt
+        except:
+            alt_val = def_alt
+        mostrar_horizonte_artificial(lat, lon, elev, azi_val, alt_val)
+    else:
+        print("No se abrirá horizonte artificial.")
 
     # Opción de cargar fichero de horizonte real
     horizonte_data = None
@@ -726,17 +859,6 @@ def main():
             print(f"Fichero '{filename}' cargado correctamente.")
         else:
             print("No se pudo cargar el fichero. Se usará el horizonte simple.")
-
-    # Opción de cargar catálogo de estrellas manualmente
-    star_catalog_manual = None
-    resp_star_file = input("\n¿Desea cargar un fichero opcional con un catálogo de estrellas? (s/n): ").strip().lower()
-    if resp_star_file == 's':
-        star_filename = input("Ingrese la ruta del fichero de estrellas (formato: cabecera, luego RA, Dec, Mag): ").strip()
-        star_catalog_manual = cargar_estrellas(star_filename)
-        if star_catalog_manual is not None:
-            print(f"Catálogo de estrellas '{star_filename}' cargado correctamente.")
-        else:
-            print("No se pudo cargar el catálogo de estrellas.")
 
     # Opción de descargar automáticamente el catálogo de estrellas
     star_catalog_auto = None
@@ -755,8 +877,8 @@ def main():
             print(f"  Segundo Contacto: {t_total_range[0].iso}")
             print(f"  Tercer Contacto:  {t_total_range[1].iso}")
             t_max = eventos["Máximo Eclipse"]["time"]
-            sun_coord = get_sun(t_max).transform_to("icrs")
-            star_catalog_auto = descargar_catalogo_estrellas(sun_coord, radius=2.5, mag_limite=6.5)
+            sun_coord = get_sun(t_max)#.transform_to("icrs")
+            star_catalog_auto = descargar_catalogo_estrellas(sun_coord, radius=2.5, mag_limite=10)
         else:
             print("\nNo se detectó eclipse total; no se descargará el catálogo automáticamente.")
     else:
@@ -802,28 +924,7 @@ def main():
     else:
         print("No se detectó eclipse total para calcular la duración de la totalidad.")
 
-    # Opción de horizonte artificial (PeakFinder)
-    resp_horizonte_artif = input("\n¿Desea ver el horizonte artificial (PeakFinder)? (s/n): ").strip().lower()
-    if resp_horizonte_artif == 's':
-        if "Máximo Eclipse" in eventos:
-            def_azi = eventos["Máximo Eclipse"].get("az_sol", None)
-            def_alt = eventos["Máximo Eclipse"].get("alt_sol", None)
-        else:
-            def_azi, def_alt = None, None
-        print("Puede ajustar manualmente azimut y altitud para la vista del horizonte artificial.")
-        azi_str = input(f"Ingrese azimut (°) [default: {def_azi if def_azi is not None else 'sin ajustar'}]: ")
-        alt_str = input(f"Ingrese altitud (°) [default: {def_alt if def_alt is not None else 'sin ajustar'}]: ")
-        try:
-            azi_val = float(azi_str) if azi_str.strip() != "" else def_azi
-        except:
-            azi_val = def_azi
-        try:
-            alt_val = float(alt_str) if alt_str.strip() != "" else def_alt
-        except:
-            alt_val = def_alt
-        mostrar_horizonte_artificial(lat, lon, elev, azi_val, alt_val)
-    else:
-        print("No se abrirá horizonte artificial.")
+
 
     # Preguntar si se desea la simulación dual (con y sin refracción)
     resp_dual = input("\n¿Desea ver la simulación dual (sin y con refracción atmosférica) simultáneamente? (s/n): ").strip().lower()
@@ -840,4 +941,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
