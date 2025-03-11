@@ -21,11 +21,12 @@ Requiere:
   - requests (pip install requests)
   - astroquery (pip install astroquery)
   - RefractionShift (pip install RefractionShift)
+  - AstroAtmosphere (pip install AstroAtmosphere)
 """
 
 import numpy as np
 from astropy.time import Time, TimeDelta
-from astropy.coordinates import EarthLocation, AltAz, get_sun, get_moon, SkyCoord
+from astropy.coordinates import EarthLocation, AltAz, get_sun, get_body, SkyCoord
 from astropy import units as u
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -195,7 +196,7 @@ def calcular_contact_angle(obstime, location):
     """
     altaz_frame = AltAz(obstime=obstime, location=location)
     sol = get_sun(obstime).transform_to(altaz_frame)
-    luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+    luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
     d_az = (luna.az - sol.az).to(u.deg).value
     d_alt = (luna.alt - sol.alt).to(u.deg).value
     d_x = d_az * np.cos(sol.alt.radian)
@@ -216,7 +217,7 @@ def calcular_ratio_moon_sun(obstime, location):
     d_sun = sun_coord.distance.to(u.km).value
     sol_diam = angular_diameter(R_SUN, d_sun)
     # Para la Luna:
-    luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+    luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
     d_luna = luna.distance.to(u.km).value
     luna_diam = angular_diameter(R_MOON, d_luna)
     ratio = luna_diam / sol_diam
@@ -228,7 +229,7 @@ def obtener_parametros(obstime, location):
     d_sun = sun_coord.distance.to(u.km).value
     altaz_frame = AltAz(obstime=obstime, location=location)
     sol = sun_coord.transform_to(altaz_frame)
-    luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+    luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
     
     sol_diam = angular_diameter(R_SUN, d_sun)
     r_sol = sol_diam / 2.0
@@ -407,7 +408,7 @@ def simular_eclipse(tiempos, location, horizon_data=None, LIMITE=2.5):
         sun_radius = sol_diam / 2.0
         sun_patch.set_radius(sun_radius)
         sol = sun_coord.transform_to(altaz_frame)
-        luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+        luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
         d_az = (luna.az - sol.az).to(u.deg).value
         d_alt = (luna.alt - sol.alt).to(u.deg).value
         d_x = d_az * np.cos(sol.alt.radian)
@@ -515,7 +516,7 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
         sun_patch1.set_radius(sun_radius)
         sun_patch2.set_radius(sun_radius)
         sol = sun_coord.transform_to(altaz_frame)
-        luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+        luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
         d_az = (luna.az - sol.az).to(u.deg).value
         d_alt = (luna.alt - sol.alt).to(u.deg).value
         d_x = d_az * np.cos(sol.alt.radian)
@@ -599,7 +600,7 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
         # ax2.add_patch(moon_patch2)
 
         # Obtener la posición original de la Luna en AltAz
-        luna = get_moon(obstime, location=location).transform_to(altaz_frame)
+        luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
         d_luna = luna.distance.to(u.km).value
         luna_diam = angular_diameter(R_MOON, d_luna)  # Diámetro angular en grados
         luna_radius = luna_diam / 2.0                 # Radio angular en grados

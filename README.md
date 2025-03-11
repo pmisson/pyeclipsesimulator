@@ -18,7 +18,7 @@ Este repositorio contiene un script en Python para calcular y visualizar eventos
 Este script requiere Python 3.x y las siguientes dependencias:
 
 ```bash
-pip install astropy matplotlib numpy geopy requests astroquery RefractionShift pandas
+pip install astropy matplotlib numpy geopy requests astroquery RefractionShift pandas AstroAtmosphere
 ```
 
 ## Uso
