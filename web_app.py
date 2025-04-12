@@ -1,0 +1,156 @@
+import streamlit as st
+from datetime import datetime
+import numpy as np
+from astropy.time import Time, TimeDelta
+from astropy.coordinates import EarthLocation, get_sun, SkyCoord
+import astropy.units as u
+import folium
+from streamlit_folium import st_folium
+
+# Importar funciones desde el script original
+from secuencia_sol_luna8 import (
+    obtener_parametros, 
+    detectar_eventos, 
+    obtener_altitud, 
+    mostrar_horizonte_artificial, 
+    cargar_estrellas, 
+    descargar_catalogo_estrellas
+)
+
+# Función auxiliar para generar la URL de PeakFinder
+def get_peakfinder_url(lat, lon, elev, azi=None, alt=None):
+    base_url = "https://www.peakfinder.com/embed/?"
+    params = f"lat={lat}&lng={lon}&ele={int(elev)}&zoom=5"
+    if azi is not None and azi != "":
+        params += f"&azi={azi}"
+    if alt is not None and alt != "":
+        params += f"&alt={alt}"
+    return base_url + params
+
+# Configuración de la página
+st.set_page_config(page_title="Simulador de Eclipse Solar", layout="wide")
+st.title("🌘 Simulador de Eclipse Solar")
+st.markdown(
+    "Esta app calcula los eventos de un eclipse solar (contactos, máximo, duración, etc.) "
+    "según la fecha, hora y ubicación que selecciones. Además, en las opciones avanzadas "
+    "podrás abrir un horizonte artificial (PeakFinder), cargar un fichero con datos reales del horizonte "
+    "y descargar el catálogo de estrellas para el campo de totalidad."
+)
+
+# --- Entradas Básicas: Fecha, Hora y Duración ---
+col1, col2 = st.columns(2)
+with col1:
+    fecha = st.date_input("📅 Fecha del eclipse", datetime(2026, 8, 12))
+with col2:
+    hora = st.time_input("⏰ Hora inicial (UT)", datetime.strptime("10:00", "%H:%M").time())
+duracion_min = st.slider("⏱️ Duración de simulación (minutos)", 5, 120, 60)
+
+# --- Selección de Ubicación mediante Mapa Interactivo ---
+st.markdown("### 🌍 Selección de ubicación (haz clic en el mapa)")
+if "coords" not in st.session_state:
+    st.session_state.coords = {"lat": 40.4168, "lng": -3.7038}  # Por defecto: Madrid
+
+m = folium.Map(location=[st.session_state.coords["lat"], st.session_state.coords["lng"]], zoom_start=5)
+folium.Marker(
+    [st.session_state.coords["lat"], st.session_state.coords["lng"]],
+    tooltip="Ubicación seleccionada",
+).add_to(m)
+map_data = st_folium(m, height=400, width=700)
+if map_data["last_clicked"] is not None:
+    st.session_state.coords = map_data["last_clicked"]
+
+lat = st.session_state.coords["lat"]
+lon = st.session_state.coords["lng"]
+st.write(f"📍 Coordenadas seleccionadas: **Latitud:** {lat:.5f}°, **Longitud:** {lon:.5f}°")
+
+# --- Altitud: Obtenerla automáticamente (usando la API de Open‑Meteo) o ingresar manualmente ---
+if "elev" not in st.session_state:
+    st.session_state.elev = None
+if st.button("Obtener altitud automáticamente"):
+    auto_elev = obtener_altitud(lat, lon)
+    if auto_elev is not None:
+        st.session_state.elev = auto_elev
+        st.success(f"Altitud obtenida: {auto_elev} metros")
+    else:
+        st.error("No se pudo obtener la altitud automáticamente.")
+
+elev_default = st.session_state.elev if st.session_state.elev is not None else 667
+elev = st.number_input("🗻 Elevación del terreno (m)", value=elev_default)
+
+# --- Opciones Avanzadas ---
+with st.expander("🔧 Opciones Avanzadas"):
+    st.markdown("#### Horizonte Artificial (PeakFinder)")
+    azi_input = st.text_input("Azimut (°) para horizonte artificial", value="")
+    alt_input = st.text_input("Altitud (°) para horizonte artificial", value="")
+    if st.button("Generar enlace a PeakFinder"):
+        peak_url = get_peakfinder_url(lat, lon, elev, azi_input, alt_input)
+        st.markdown(f"[Abrir Horizonte Artificial en PeakFinder]({peak_url})", unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("#### Cargar fichero con datos reales del horizonte")
+    uploaded_horizonte = st.file_uploader("Subir fichero (dos columnas: az alt, con cabecera)", type=["txt", "csv"])
+    horizon_data = None
+    if uploaded_horizonte is not None:
+        try:
+            horizon_data = np.loadtxt(uploaded_horizonte, skiprows=1)
+            st.success("Fichero de horizonte cargado correctamente.")
+        except Exception as e:
+            st.error("Error al cargar el fichero: " + str(e))
+    
+    st.markdown("---")
+    descargar_catalogo_flag = st.checkbox("Descargar catálogo de estrellas automáticamente (para el campo de totalidad)")
+
+# --- Botón para ejecutar el cálculo de eventos del eclipse ---
+if st.button("🔍 Calcular eventos del eclipse"):
+    st.info("Calculando eventos del eclipse...")
+    try:
+        # Generar serie de tiempos para la simulación
+        t_ini = Time(datetime.combine(fecha, hora))
+        dt = 10  # segundos entre pasos
+        pasos = int((duracion_min * 60) / dt) + 1
+        tiempos = t_ini + TimeDelta(np.arange(0, pasos * dt, dt), format='sec')
+
+        # Crear el objeto de localización
+        location_obj = EarthLocation(lat=lat * u.deg, lon=lon * u.deg, height=elev * u.m)
+
+        # Calcular parámetros y detectar eventos del eclipse
+        params_array = [obtener_parametros(t, location_obj) for t in tiempos]
+        eventos = detectar_eventos(tiempos, params_array, location_obj)
+        
+        st.success("🎯 Eventos del eclipse calculados:")
+        for nombre, evento in eventos.items():
+            tiempo = evento.get("time", "N/A")
+            alt_sol = evento.get("alt_sol", None)
+            az_sol = evento.get("az_sol", None)
+            mag = evento.get("mag", None)
+            if alt_sol is not None:
+                st.markdown(f"**🟢 {nombre}** — "
+                            f"🕒 **UT:** {tiempo.iso}, "
+                            f"🔼 Alt: {alt_sol:.2f}°, "
+                            f"➡️ Az: {az_sol:.2f}°, "
+                            f"🌑 Magnitud: {mag:.3f}")
+            else:
+                st.markdown(f"**🟢 {nombre}** — 🕒 **UT:** {tiempo.iso}")
+
+        # Si se marcó la opción, descargar el catálogo de estrellas automáticamente
+        if descargar_catalogo_flag:
+            if "Segundo Contacto" in eventos and "Tercer Contacto" in eventos:
+                t_max = eventos["Máximo Eclipse"]["time"]
+                sun_coord = get_sun(t_max)
+                star_catalog = descargar_catalogo_estrellas(sun_coord, radius=2.5, mag_limite=10)
+                if star_catalog is not None and len(star_catalog) > 0:
+                    st.success("Catálogo de estrellas descargado.")
+                    # Convertir a DataFrame y generar CSV para descarga
+                    import pandas as pd
+                    df_stars = pd.DataFrame(star_catalog, columns=["RA_ICRS", "DE_ICRS", "Gmag"])
+                    csv_data = df_stars.to_csv(index=False).encode('utf-8')
+                    st.download_button("Descargar Catálogo de Estrellas (CSV)", data=csv_data, file_name="catalogo_estrellas.csv", mime="text/csv")
+                else:
+                    st.warning("No se encontró catálogo de estrellas o está vacío.")
+            else:
+                st.warning("No se detectó eclipse total; el catálogo de estrellas no se descargará.")
+
+    except Exception as e:
+        st.error(f"❌ Error durante el cálculo: {e}")
+
+
