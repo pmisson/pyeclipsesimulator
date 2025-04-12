@@ -1,0 +1,41 @@
+Metadata-Version: 2.1
+Name: RefractionShift
+Version: 0.1.1
+Summary: A python module for computing the lateral shift due to atmospheric refraction 
+Home-page: https://github.com/OneraHub/RefractionShift
+Author: Hanae Labriji
+Author-email: hanae.labriji@gmail.com
+License: UNKNOWN
+Project-URL: Bug Tracker, https://github.com/OneraHub/RefractionShift/issues
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: GNU General Public License (GPL)
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+## RefractionShift
+RefractionShift is a python module for computing the lateral shift due to atmospheric refraction.
+
+## Installation
+Check first that you have the Python package AstroAtmosphere, otherwise just run: 
+```bash
+pip install AstroAtmosphere
+```
+then run:
+```bash
+pip install RefractionShift 
+python "test_refraction.py"
+```
+The file `example.py` contains a working example.
+
+## Usage
+This module allows you to calculate the lateral shift with four different methods. First, using numerical integration along the optical path of the light ray. To do so, we employ the two-layer model of the atmosphere, with a constant temperature gradient in the troposphere and nil beyond. In addition, there are three approximations of different order depending on the refractive index and Earth's roundness.
+Details on the use of the four methods are given in the file `example.py`.
+
+
+## License
+[GPL-3.0](https://choosealicense.com/licenses/gpl-3.0/)
+
+

@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
 Script integrado para:
-  1. Calcular y tabular los eventos relevantes en un eclipse solar.
-  2. Ofrecer la posibilidad de cargar un fichero opcional con datos reales del horizonte.
+  1. Calcular y tabular eventos relevantes en un eclipse solar.
+  2. Permitir cargar un fichero opcional con datos reales del horizonte.
   3. Permitir la selección de la localización mediante tres opciones:
-       a) Escribir el nombre de un municipio o lugar (forward geocoding),
+       a) Nombre del municipio (forward geocoding),
        b) Ingresar coordenadas manualmente,
        c) Seleccionar de una lista de capitales de provincia (reverse geocoding).
-  4. Si la altitud no se ingresa, obtenerla automáticamente usando la API de Open‑Meteo.
-  5. Permitir la carga manual de un catálogo de estrellas (fichero) y/o su descarga automática
-     usando Astroquery (Vizier) para el campo de totalidad (hasta magnitud 6.5).
-  6. Mostrar dos simulaciones simultáneas (lado a lado): sin refracción y con refracción atmosférica,
+  4. Obtener la elevación automáticamente usando la API de Open‑Meteo si se deja en blanco.
+  5. Cargar o descargar automáticamente un catálogo de estrellas (hasta magnitud 6.5) mediante Astroquery (Vizier).
+  6. Mostrar dos simulaciones (lado a lado): sin refracción y con refracción atmosférica,
      sobreponiendo las estrellas durante la totalidad.
-  7. Ofrecer la opción de abrir un horizonte artificial mediante PeakFinder.
-  8. Calcular la duración precisa del eclipse (total y de la totalidad, si existe).
-  
+  7. Ofrecer la opción de abrir el perfil de PeakFinder, configurado con la orientación de la Luna y la hora del eclipse.
+  8. También usar ShadeMap para visualizar la zona de sombras con zoom 13 por defecto, según el formato:
+       https://shademap.app/@<lat>,<lon>,<zoom>z,<timestamp>t,<bearing>b,<pitch>p,<margin>m
+  9. Calcular la duración precisa del eclipse (total y de la totalidad, si existe).
+
 Requiere:
   - astropy, matplotlib, numpy
   - geopy (pip install geopy)
@@ -30,20 +31,16 @@ from astropy.coordinates import EarthLocation, AltAz, get_sun, get_body, SkyCoor
 from astropy import units as u
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Ellipse
 import sys, webbrowser, os, requests
 from geopy.geocoders import Nominatim
 import time as pytime
-from matplotlib.patches import Ellipse
-
-# Para descargar catálogo de estrellas desde Vizier
-from astroquery.vizier import Vizier
 import pandas as pd
 
-# Importar RefractionShift
+from astroquery.vizier import Vizier
 from RefractionShift.refraction_shift import refraction
 
-# --- Constantes físicas (se conserva el radio de cada cuerpo) ---
+# --- Constantes físicas ---
 R_SUN = 696340.0         # km
 R_MOON = 1737.4          # km
 
@@ -87,8 +84,8 @@ capitales = {
     "Zaragoza": (41.6488, -0.8891)
 }
 
+# --- Funciones auxiliares ---
 
-# --- Función para obtener altitud automáticamente usando Open‑Meteo ---
 def obtener_altitud(lat, lon):
     url = f"https://api.open-meteo.com/v1/elevation?latitude={lat}&longitude={lon}"
     try:
@@ -98,10 +95,9 @@ def obtener_altitud(lat, lon):
             if "elevation" in data and isinstance(data["elevation"], list) and len(data["elevation"]) > 0:
                 return data["elevation"][0]
         return None
-    except Exception as e:
+    except Exception:
         return None
 
-# --- Funciones para geocoding ---
 def geocode_lugar(nombre):
     geolocator = Nominatim(user_agent="eclipse_app")
     try:
@@ -110,7 +106,7 @@ def geocode_lugar(nombre):
             return (location.latitude, location.longitude, location.address)
         else:
             return (None, None, None)
-    except Exception as e:
+    except Exception:
         return (None, None, None)
 
 def reverse_geocode(lat, lon):
@@ -121,14 +117,12 @@ def reverse_geocode(lat, lon):
             return location.address
         else:
             return "Desconocido"
-    except Exception as e:
+    except Exception:
         return "Error"
 
-# --- Función para descargar automáticamente catálogo de estrellas desde Vizier ---
 def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=10):
-    # Convierte center_coord a ICRS
-    center_coord = SkyCoord(ra=center_coord.ra, dec=center_coord.dec, unit='deg', frame='icrs')
     Vizier.ROW_LIMIT = -1
+    center_coord = SkyCoord(ra=center_coord.ra, dec=center_coord.dec, unit='deg', frame='icrs')
     columns = ["RA_ICRS", "DE_ICRS", "Gmag"]
     vizier = Vizier(columns=columns, row_limit=-1)
     try:
@@ -144,7 +138,6 @@ def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=10):
         print("No se encontraron estrellas en el campo seleccionado.")
         return None
 
-# --- Función para cargar catálogo de estrellas desde fichero ---
 def cargar_estrellas(filename):
     if not os.path.isfile(filename):
         print(f"El fichero de estrellas '{filename}' no existe.")
@@ -153,12 +146,11 @@ def cargar_estrellas(filename):
         data = np.loadtxt(filename, skiprows=1)
         if data.ndim == 1:
             data = data.reshape((1, -1))
-        return data  # columnas: [RA, Dec, Mag]
+        return data
     except Exception as e:
         print(f"Error al cargar el fichero de estrellas: {e}")
         return None
 
-# --- Función para cargar horizonte real desde fichero ---
 def cargar_horizonte(filename):
     if not os.path.isfile(filename):
         print(f"El fichero '{filename}' no existe.")
@@ -167,33 +159,26 @@ def cargar_horizonte(filename):
         data = np.loadtxt(filename, skiprows=1)
         if data.ndim == 1:
             data = data.reshape((1, -1))
-        return data  # columnas: [az, alt]
+        return data
     except Exception as e:
         print(f"Error al cargar el fichero: {e}")
         return None
 
-# --- Función para aplicar refracción (RefractionShift) ---
 def aplicar_refraction(alt, az, distance, Refraction, lmbda=550e-9):
-    z = np.deg2rad(90 - alt)  # ángulo zenital en radianes
-    shift_rad = Refraction.get_AngularShift(z, lmbda)  # en radianes
+    z = np.deg2rad(90 - alt)
+    shift_rad = Refraction.get_AngularShift(z, lmbda)
     shift_deg = np.degrees(shift_rad)
-    lateral_m = Refraction.get_LateralShift(z, lmbda)  # en metros
+    lateral_m = Refraction.get_LateralShift(z, lmbda)
     lateral_ang = np.degrees(np.arctan(lateral_m / (distance * 1000)))
     alt_corr = alt + shift_deg
     az_corr = az + lateral_ang
     return alt_corr, az_corr
 
-# --- Función para calcular diámetro angular usando la distancia actual ---
 def angular_diameter(radius, distance):
     diam_rad = 2 * np.arctan(radius / distance)
     return np.degrees(diam_rad)
 
-# --- Función auxiliar para calcular el ángulo de contacto ---
 def calcular_contact_angle(obstime, location):
-    """
-    Calcula el ángulo (en grados) formado por la línea que une los centros del Sol y la Luna
-    respecto a una referencia (usando arctan2 de las diferencias en altitud y acimut corregidas).
-    """
     altaz_frame = AltAz(obstime=obstime, location=location)
     sol = get_sun(obstime).transform_to(altaz_frame)
     luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
@@ -201,34 +186,23 @@ def calcular_contact_angle(obstime, location):
     d_alt = (luna.alt - sol.alt).to(u.deg).value
     d_x = d_az * np.cos(sol.alt.radian)
     d_y = d_alt
-    angle = np.degrees(np.arctan2(d_y, d_x))
-    return angle
+    return np.degrees(np.arctan2(d_y, d_x))
 
-# --- Función para calcular el Moon/Sun size ratio usando las distancias reales ---
 def calcular_ratio_moon_sun(obstime, location):
-    """
-    Calcula el diámetro angular del Sol usando la distancia real (obtenida con get_sun)
-    y el de la Luna usando su distancia actual; devuelve el Moon/Sun size ratio y ambos
-    diámetros angulares en grados.
-    """
     altaz_frame = AltAz(obstime=obstime, location=location)
-    # Para el Sol: obtener la posición y su distancia real
-    sun_coord = get_sun(obstime)
-    d_sun = sun_coord.distance.to(u.km).value
+    sol = get_sun(obstime)
+    d_sun = sol.distance.to(u.km).value
     sol_diam = angular_diameter(R_SUN, d_sun)
-    # Para la Luna:
     luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
     d_luna = luna.distance.to(u.km).value
     luna_diam = angular_diameter(R_MOON, d_luna)
-    ratio = luna_diam / sol_diam
-    return ratio, luna_diam, sol_diam
+    return luna_diam / sol_diam, luna_diam, sol_diam
 
-# --- Función para obtener parámetros del eclipse usando distancias reales ---
 def obtener_parametros(obstime, location):
-    sun_coord = get_sun(obstime)
-    d_sun = sun_coord.distance.to(u.km).value
+    sol = get_sun(obstime)
+    d_sun = sol.distance.to(u.km).value
     altaz_frame = AltAz(obstime=obstime, location=location)
-    sol = sun_coord.transform_to(altaz_frame)
+    sol_trans = sol.transform_to(altaz_frame)
     luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
     
     sol_diam = angular_diameter(R_SUN, d_sun)
@@ -238,14 +212,14 @@ def obtener_parametros(obstime, location):
     luna_diam = angular_diameter(R_MOON, d_luna)
     r_luna = luna_diam / 2.0
 
-    d_az = (luna.az - sol.az).to(u.deg).value
-    d_alt = (luna.alt - sol.alt).to(u.deg).value
-    d_x = d_az * np.cos(sol.alt.radian)
+    d_az = (luna.az - sol_trans.az).to(u.deg).value
+    d_alt = (luna.alt - sol_trans.alt).to(u.deg).value
+    d_x = d_az * np.cos(sol_trans.alt.radian)
     d_y = d_alt
     d = np.sqrt(d_x**2 + d_y**2)
 
-    alt_sol = sol.alt.to(u.deg).value
-    az_sol = sol.az.to(u.deg).value
+    alt_sol = sol_trans.alt.to(u.deg).value
+    az_sol = sol_trans.az.to(u.deg).value
 
     if d < (r_sol + r_luna):
         mag = ((r_sol + r_luna) - d) / (2 * r_sol)
@@ -264,7 +238,6 @@ def obtener_parametros(obstime, location):
         'mag': mag
     }
 
-# --- Función de interpolación lineal ---
 def linear_interpolate(t1, t2, v1, v2, target):
     if v2 == v1:
         return t1
@@ -272,7 +245,6 @@ def linear_interpolate(t1, t2, v1, v2, target):
     dt = (t2 - t1).sec
     return t1 + TimeDelta(frac * dt, format='sec')
 
-# --- Función para detectar eventos del eclipse ---
 def detectar_eventos(time_array, params_array, location):
     eventos = {}
     N = len(time_array)
@@ -285,95 +257,79 @@ def detectar_eventos(time_array, params_array, location):
     # Primer y Cuarto Contacto (eclipse parcial)
     for i in range(N-1):
         if d_vals[i] > T_ext[i] and d_vals[i+1] <= T_ext[i+1]:
-            t_contact = linear_interpolate(time_array[i], time_array[i+1],
-                                           d_vals[i], d_vals[i+1], T_ext[i])
+            t_contact = linear_interpolate(time_array[i], time_array[i+1], d_vals[i], d_vals[i+1], T_ext[i])
             elapsed = (t_contact - time_array[0]).sec
             total = (time_array[-1] - time_array[0]).sec
             alt_interp = np.interp(elapsed, [0, total], [alt_sol_vals[0], alt_sol_vals[-1]])
             az_interp = np.interp(elapsed, [0, total], [az_sol_vals[0], az_sol_vals[-1]])
-            eventos['Primer Contacto'] = {'time': t_contact,
-                                          'alt_sol': alt_interp,
-                                          'az_sol': az_interp,
-                                          'd': T_ext[i],
-                                          'mag': np.interp(elapsed, [0, total],
-                                                           [params_array[i]['mag'], params_array[i+1]['mag']])
-                                         }
+            eventos['Primer Contacto'] = {
+                'time': t_contact, 'alt_sol': alt_interp, 'az_sol': az_interp,
+                'd': T_ext[i],
+                'mag': np.interp(elapsed, [0, total], [params_array[i]['mag'], params_array[i+1]['mag']])
+            }
             break
 
     for i in range(N-1):
         if d_vals[i] <= T_ext[i] and d_vals[i+1] > T_ext[i+1]:
-            t_contact = linear_interpolate(time_array[i], time_array[i+1],
-                                           d_vals[i], d_vals[i+1], T_ext[i])
+            t_contact = linear_interpolate(time_array[i], time_array[i+1], d_vals[i], d_vals[i+1], T_ext[i])
             elapsed = (t_contact - time_array[0]).sec
             total = (time_array[-1] - time_array[0]).sec
             alt_interp = np.interp(elapsed, [0, total], [alt_sol_vals[0], alt_sol_vals[-1]])
             az_interp = np.interp(elapsed, [0, total], [az_sol_vals[0], az_sol_vals[-1]])
-            eventos['Cuarto Contacto'] = {'time': t_contact,
-                                          'alt_sol': alt_interp,
-                                          'az_sol': az_interp,
-                                          'd': T_ext[i],
-                                          'mag': np.interp(elapsed, [0, total],
-                                                           [params_array[i]['mag'], params_array[i+1]['mag']])
-                                         }
+            eventos['Cuarto Contacto'] = {
+                'time': t_contact, 'alt_sol': alt_interp, 'az_sol': az_interp,
+                'd': T_ext[i],
+                'mag': np.interp(elapsed, [0, total], [params_array[i]['mag'], params_array[i+1]['mag']])
+            }
             break
 
     # Segundo y Tercer Contacto (eclipse total)
     if any([p['r_luna'] > p['r_sol'] for p in params_array]):
         for i in range(N-1):
             if d_vals[i] > T_int[i] and d_vals[i+1] <= T_int[i+1]:
-                t_contact = linear_interpolate(time_array[i], time_array[i+1],
-                                               d_vals[i], d_vals[i+1], T_int[i])
+                t_contact = linear_interpolate(time_array[i], time_array[i+1], d_vals[i], d_vals[i+1], T_int[i])
                 elapsed = (t_contact - time_array[0]).sec
                 total = (time_array[-1] - time_array[0]).sec
                 alt_interp = np.interp(elapsed, [0, total], [alt_sol_vals[0], alt_sol_vals[-1]])
                 az_interp = np.interp(elapsed, [0, total], [az_sol_vals[0], az_sol_vals[-1]])
                 angle_contact = calcular_contact_angle(t_contact, location)
-                eventos['Segundo Contacto'] = {'time': t_contact,
-                                               'alt_sol': alt_interp,
-                                               'az_sol': az_interp,
-                                               'd': T_int[i],
-                                               'mag': 1.0,
-                                               'angle': angle_contact}
+                eventos['Segundo Contacto'] = {
+                    'time': t_contact, 'alt_sol': alt_interp, 'az_sol': az_interp, 
+                    'd': T_int[i], 'mag': 1.0, 'angle': angle_contact
+                }
                 break
         for i in range(N-1):
             if d_vals[i] <= T_int[i] and d_vals[i+1] > T_int[i+1]:
-                t_contact = linear_interpolate(time_array[i], time_array[i+1],
-                                               d_vals[i], d_vals[i+1], T_int[i])
+                t_contact = linear_interpolate(time_array[i], time_array[i+1], d_vals[i], d_vals[i+1], T_int[i])
                 elapsed = (t_contact - time_array[0]).sec
                 total = (time_array[-1] - time_array[0]).sec
                 alt_interp = np.interp(elapsed, [0, total], [alt_sol_vals[0], alt_sol_vals[-1]])
                 az_interp = np.interp(elapsed, [0, total], [az_sol_vals[0], az_sol_vals[-1]])
                 angle_contact = calcular_contact_angle(t_contact, location)
-                eventos['Tercer Contacto'] = {'time': t_contact,
-                                              'alt_sol': alt_interp,
-                                              'az_sol': az_interp,
-                                              'd': T_int[i],
-                                              'mag': 1.0,
-                                              'angle': angle_contact}
+                eventos['Tercer Contacto'] = {
+                    'time': t_contact, 'alt_sol': alt_interp, 'az_sol': az_interp, 
+                    'd': T_int[i], 'mag': 1.0, 'angle': angle_contact
+                }
                 break
 
-    # Máximo Eclipse: el instante en que la separación es mínima
+    # Máximo Eclipse
     i_min = np.argmin(d_vals)
     eventos['Máximo Eclipse'] = params_array[i_min]
 
-    # Puesta de Sol (cuando la altitud del Sol cruza 0°)
+    # Puesta de Sol
     for i in range(N-1):
         if alt_sol_vals[i] > 0 and alt_sol_vals[i+1] <= 0:
-            t_sunset = linear_interpolate(time_array[i], time_array[i+1],
-                                          alt_sol_vals[i], alt_sol_vals[i+1], 0)
+            t_sunset = linear_interpolate(time_array[i], time_array[i+1], alt_sol_vals[i], alt_sol_vals[i+1], 0)
             elapsed = (t_sunset - time_array[0]).sec
             total = (time_array[-1] - time_array[0]).sec
             az_interp = np.interp(elapsed, [0, total], [az_sol_vals[0], az_sol_vals[-1]])
-            eventos['Puesta de Sol'] = {'time': t_sunset,
-                                         'alt_sol': 0.0,
-                                         'az_sol': az_interp,
-                                         'd': np.nan,
-                                         'mag': np.nan}
+            eventos['Puesta de Sol'] = {
+                'time': t_sunset, 'alt_sol': 0.0, 'az_sol': az_interp, 'd': np.nan, 'mag': np.nan
+            }
             break
 
     return eventos
 
-# --- Función para la simulación simple (sin refracción) ---
 def simular_eclipse(tiempos, location, horizon_data=None, LIMITE=2.5):
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.set_xlim(-LIMITE, LIMITE)
@@ -446,7 +402,6 @@ def simular_eclipse(tiempos, location, horizon_data=None, LIMITE=2.5):
                                   init_func=init, blit=True, interval=200, repeat=True)
     plt.show()
 
-# --- Función para la simulación dual (sin y con refracción) con estrellas ---
 def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data=None, t_total_range=None, LIMITE=2.5):
     Refraction_inst = refraction(288.15, 101325, location.height.value)
     lmbda = 550e-9
@@ -497,18 +452,15 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
         obstime = tiempos[frame]
         altaz_frame = AltAz(obstime=obstime, location=location)
         
-        # --- 🌑 CAMBIO DE FONDO DURANTE TOTALIDAD 🌑 ---
         if t_total_range is not None:
             t_start, t_end = t_total_range
             if t_start <= obstime <= t_end:
-                ax1.set_facecolor('black')  # Fondo negro en totalidad
+                ax1.set_facecolor('black')
                 ax2.set_facecolor('black')
             else:
-                ax1.set_facecolor('white')  # Vuelve a blanco fuera de totalidad
+                ax1.set_facecolor('white')
                 ax2.set_facecolor('white')
         
-        
-        # Sin refracción
         sun_coord = get_sun(obstime)
         d_sun = sun_coord.distance.to(u.km).value
         sol_diam = angular_diameter(R_SUN, d_sun)
@@ -529,7 +481,7 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
         time_text1.set_text(f"UT:\n{obstime.iso}")
 
         if horizon_data is not None:
-            pts1 = []
+            pts = []
             sol_az = sol.az.to(u.deg).value
             sol_alt = sol.alt.to(u.deg).value
             for point in horizon_data:
@@ -537,9 +489,9 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
                 d_az_point = ((az_h - sol_az + 180) % 360) - 180
                 x_pt = d_az_point * np.cos(sol.alt.radian)
                 y_pt = alt_h - sol_alt
-                pts1.append([x_pt, y_pt])
-            pts1 = np.array(pts1)
-            horizon_line1.set_data(pts1[:,0], pts1[:,1])
+                pts.append([x_pt, y_pt])
+            pts = np.array(pts)
+            horizon_line1.set_data(pts[:,0], pts[:,1])
         else:
             horizon_d_y = 0 - sol.alt.to(u.deg).value
             if -LIMITE <= horizon_d_y <= LIMITE:
@@ -548,94 +500,55 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
                 horizon_line1.set_data(x_vals, y_vals)
             else:
                 horizon_line1.set_data([], [])
-
-        # --- PANEL CON REFRACCIÓN ---
-
-        # Importante: asegúrate de haber importado Ellipse:
-        # from matplotlib.patches import Ellipse
-
-        # --- Para el Sol (patch: sun_patch2) ---
-
-        # Se asume que 'sun_patch2' ya fue creado previamente de la siguiente forma:
-        # sun_patch2 = Ellipse((0, 0), width=2, height=2, facecolor='gold', alpha=0.6, edgecolor='darkgoldenrod', lw=1.5)
-        # ax2.add_patch(sun_patch2)
-
-        # Obtener el objeto del Sol y su distancia real
-        #sol = get_sun(obstime)
+        
         d_sun = sol.distance.to(u.km).value
-        sol_diam = angular_diameter(R_SUN, d_sun)  # Diámetro angular en grados
-        sun_radius = sol_diam / 2.0                # Radio angular en grados
+        sol_diam = angular_diameter(R_SUN, d_sun)
+        sun_radius = sol_diam / 2.0
 
-        # Definir el sistema AltAz y transformar la posición del Sol
-        altaz_frame = AltAz(obstime=obstime, location=location)
-        sol_altaz = sol.transform_to(altaz_frame)
-        alt_sol = sol_altaz.alt.to(u.deg).value
-        az_sol = sol_altaz.az.to(u.deg).value
+        alt_sol = sol.alt.to(u.deg).value
+        az_sol = sol.az.to(u.deg).value
 
-        # Aplicar refracción al centro del Sol
         sol_eff_alt, sol_eff_az = aplicar_refraction(alt_sol, az_sol, d_sun, Refraction_inst, lmbda)
 
-        # Calcular la posición refractada para el borde superior e inferior del disco solar:
         alt_top = alt_sol + sun_radius
         alt_top_eff, _ = aplicar_refraction(alt_top, az_sol, d_sun, Refraction_inst, lmbda)
         alt_bot = alt_sol - sun_radius
         alt_bot_eff, _ = aplicar_refraction(alt_bot, az_sol, d_sun, Refraction_inst, lmbda)
-
-        # El diámetro vertical efectivo es la diferencia entre las posiciones refractadas
         sol_diam_vert_eff = alt_top_eff - alt_bot_eff
-        # Se deja el diámetro horizontal igual que el original
         sol_diam_horiz = sol_diam
 
-        # Actualizar el patch del Sol (sun_patch2)
-        # Se asume que en el diagrama se usan unidades relativas al Sol, por ello se centra en (0,0)
         sun_patch2.center = (0, 0)
         sun_patch2.width = sol_diam_horiz
         sun_patch2.height = sol_diam_vert_eff
-        sun_patch2.angle = 0  # Se puede modificar si se desea rotar la elipse
+        sun_patch2.angle = 0
 
-        # --- Para la Luna (patch: moon_patch2) ---
-
-        # Se asume que 'moon_patch2' ha sido creado previamente como:
-        # moon_patch2 = Ellipse((0, 0), width=1, height=1, facecolor='silver', alpha=0.6, edgecolor='dimgray', lw=1.5)
-        # ax2.add_patch(moon_patch2)
-
-        # Obtener la posición original de la Luna en AltAz
         luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
         d_luna = luna.distance.to(u.km).value
-        luna_diam = angular_diameter(R_MOON, d_luna)  # Diámetro angular en grados
-        luna_radius = luna_diam / 2.0                 # Radio angular en grados
+        luna_diam = angular_diameter(R_MOON, d_luna)
+        luna_radius = luna_diam / 2.0
 
         alt_luna = luna.alt.to(u.deg).value
         az_luna = luna.az.to(u.deg).value
 
-        # Aplicar refracción al centro de la Luna
         luna_eff_alt, luna_eff_az = aplicar_refraction(alt_luna, az_luna, d_luna, Refraction_inst, lmbda)
 
-        # Calcular la posición refractada para la parte superior e inferior del disco lunar
         alt_top_luna = alt_luna + luna_radius
         alt_top_luna_eff, _ = aplicar_refraction(alt_top_luna, az_luna, d_luna, Refraction_inst, lmbda)
         alt_bot_luna = alt_luna - luna_radius
         alt_bot_luna_eff, _ = aplicar_refraction(alt_bot_luna, az_luna, d_luna, Refraction_inst, lmbda)
-
-        # El diámetro vertical efectivo para la Luna
         luna_diam_vert_eff = alt_top_luna_eff - alt_bot_luna_eff
-        # Se deja el diámetro horizontal igual que el original
         luna_diam_horiz = luna_diam
 
-        # Para situar la Luna en el diagrama, se calcula su posición relativa respecto al Sol refractado
         d_az_eff = (luna_eff_az - sol_eff_az)
         d_x_eff = d_az_eff * np.cos(np.deg2rad(sol_eff_alt))
         d_y_eff = luna_eff_alt - sol_eff_alt
 
-        # Actualizar el patch de la Luna (moon_patch2)
         moon_patch2.center = (d_x_eff, d_y_eff)
         moon_patch2.width = luna_diam_horiz
         moon_patch2.height = luna_diam_vert_eff
-        moon_patch2.angle = 0  # Se puede ajustar si se desea rotar la elipse
+        moon_patch2.angle = 0
 
-        # Actualizar el texto de tiempo
         time_text2.set_text(f"UT:\n{obstime.iso}")
-
 
         if horizon_data is not None:
             pts2 = []
@@ -656,23 +569,18 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
             else:
                 horizon_line2.set_data([], [])
         
-        # Sobreponer estrellas durante la totalidad
         stars_x1, stars_y1, stars_sizes1 = [], [], []
         stars_x2, stars_y2, stars_sizes2 = [], [], []
         if star_catalog_data is not None and t_total_range is not None:
             t_start, t_end = t_total_range
             if t_start <= obstime <= t_end:
-                ax1.set_facecolor('black')  # Fondo negro en totalidad
+                ax1.set_facecolor('black')
                 ax2.set_facecolor('black')
-
                 for star in star_catalog_data:
                     ra, dec, mag = star
-                    #if mag < 10:
-                    #    continue
                     coord = SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame='icrs')
                     coord_altaz = coord.transform_to(AltAz(obstime=obstime, location=location))
                     if coord_altaz.alt.deg > 0:
-                        sol = sun_coord.transform_to(altaz_frame)
                         sol_az_deg = az_sol
                         sol_alt_deg = alt_sol
                         d_az_star = ((coord_altaz.az.deg - sol_az_deg + 180) % 360) - 180
@@ -691,9 +599,8 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
                         stars_x2.append(x_star_eff)
                         stars_y2.append(y_star_eff)
                         stars_sizes2.append(size)
-                    
             else:
-                ax1.set_facecolor('white')  # Vuelve a blanco fuera de totalidad
+                ax1.set_facecolor('white')
                 ax2.set_facecolor('white')
             
         stars_scatter1.set_offsets(np.column_stack((stars_x1, stars_y1)))
@@ -702,26 +609,66 @@ def simular_eclipse_dual(tiempos, location, horizon_data=None, star_catalog_data
         stars_scatter2.set_sizes(stars_sizes2)
         
         return (moon_patch1, time_text1, horizon_line1, stars_scatter1,
-                moon_patch2, time_text2, horizon_line2, stars_scatter2,ax1,ax2)
+                moon_patch2, time_text2, horizon_line2, stars_scatter2, ax1, ax2)
     update(0)
     ani = animation.FuncAnimation(fig, update, frames=len(tiempos),
                                   init_func=init, blit=True, interval=200, repeat=True)
     plt.show()
 
-# --- Función para horizonte artificial (PeakFinder) ---
-def mostrar_horizonte_artificial(lat, lon, elev, azi=None, alt=None):
-    base_url = "https://www.peakfinder.com/embed/?"
-    params = f"lat={lat}&lng={lon}&ele={int(elev)}&zoom=5"
-    if azi is not None:
-        params += f"&azi={azi}"
-    if alt is not None:
-        params += f"&alt={alt}"
+# --- Función para abrir el perfil de PeakFinder con el formato corregido ---
+def mostrar_peakfinder(lat, lon, eclipse_time=None, luna_azi=None, luna_alt=None,
+                       fov=110, cfg="sm", teleazi=-77.98, telealt=8.91, name="Frómista"):
+    """
+    Abre el perfil de PeakFinder usando el formato:
+    https://www.peakfinder.com/es/?lat=<lat>&lng=<lon>&azi=<luna_azi>&alt=<luna_alt>&fov=<fov>&date=<date_iso>&cfg=<cfg>&teleazi=<teleazi>&telealt=<telealt>&name=<name>
+    Se convierte eclipse_time a formato ISO con separador "T" (e.g., 2026-08-12T18:29:20Z).
+    """
+    date_str = ""
+    if eclipse_time is not None:
+        # Se fuerza reemplazando el espacio por "T"
+        date_str = eclipse_time.iso.split('.')[0].replace(" ", "T") + "Z"
+    base_url = "https://www.peakfinder.com/es/?"
+    params = f"lat={lat}&lng={lon}"
+    if luna_azi is not None:
+        params += f"&azi={luna_azi}"
+    if luna_alt is not None:
+        params += f"&alt={luna_alt}"
+    params += f"&fov={fov}"
+    if date_str:
+        params += f"&date={date_str}"
+    params += f"&cfg={cfg}"
+    if teleazi is not None:
+        params += f"&teleazi={teleazi}"
+    if telealt is not None:
+        params += f"&telealt={telealt}"
+    if name:
+        params += f"&name={name}"
     url = base_url + params
-    print("\nAbriendo horizonte artificial en el navegador:")
+    print("\nAbriendo PeakFinder en el navegador:")
     print(url)
     webbrowser.open(url)
 
-# --- Función para seleccionar la localización (3 opciones) ---
+# --- Función para abrir ShadeMap con zoom 13 por defecto ---
+def mostrar_shademap(lat, lon, elev, eclipse_time=None, zoom=13, bearing=0, pitch=0, margin=0):
+    """
+    Abre ShadeMap utilizando el formato:
+    https://shademap.app/@<lat>,<lon>,<zoom>z,<timestamp>t,<bearing>b,<pitch>p,<margin>m
+    Se obtiene el timestamp (en milisegundos) a partir de eclipse_time, si se proporciona.
+    """
+    base_url = "https://shademap.app/@"
+    lat_str = f"{lat:.3f}"
+    lon_str = f"{lon:.3f}"
+    if eclipse_time is not None:
+        ts_ms = int(eclipse_time.unix * 1000)
+    else:
+        from time import time as current_time
+        ts_ms = int(current_time() * 1000)
+    url = f"{base_url}{lat_str},{lon_str},{zoom}z,{ts_ms}t,{bearing}b,{pitch}p,{margin}m"
+    print("\nAbriendo ShadeMap en el navegador:")
+    print(url)
+    webbrowser.open(url)
+
+# --- Función para seleccionar la localización ---
 def seleccionar_localizacion():
     print("Seleccione la forma de indicar la localización:")
     print("1. Escribir el nombre de un municipio o lugar")
@@ -772,7 +719,6 @@ def seleccionar_localizacion():
         print("Opción no válida. Intente nuevamente.")
         return seleccionar_localizacion()
 
-# --- Función para descargar el catálogo de estrellas automáticamente ---
 def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=10):
     Vizier.ROW_LIMIT = -1
     center_coord = SkyCoord(ra=center_coord.ra, dec=center_coord.dec, unit='deg', frame='icrs')
@@ -791,15 +737,12 @@ def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=10):
         print("No se encontraron estrellas en el campo seleccionado.")
         return None
 
-# --- Función principal ---
 def main():
     print("=== Cálculo de eventos, horizonte, catálogo de estrellas y simulación dual del eclipse solar ===\n")
     print("La hora de entrada es en Tiempo Universal (UT).\n")
     
-    # Seleccionar localización
     lat, lon, loc_desc = seleccionar_localizacion()
     
-    # Solicitar altitud; si se deja en blanco, se obtiene automáticamente.
     alt_input = input("Ingrese la elevación en metros (ej. 667) [deje en blanco para obtener automáticamente]: ").strip()
     if alt_input == "":
         alt_auto = obtener_altitud(lat, lon)
@@ -816,25 +759,38 @@ def main():
             elev = 667
             print("Entrada inválida. Se usará 667 metros.")
     
-    inicio_str = input("Ingrese la fecha/hora de inicio (YYYY-MM-DD HH:MM:SS UT) [default: 2026-08-12 10:00:00]: ") or "2026-08-12 10:00:00"
+    # Hora por defecto actualizada a "2026-08-12 17:30:00"
+    inicio_str = input("Ingrese la fecha/hora de inicio (YYYY-MM-DD HH:MM:SS UT) [default: 2026-08-12 17:30:00]: ") or "2026-08-12 17:30:00"
     duracion_str = input("Ingrese la duración de la simulación en minutos [default: 60]: ") or "60"
     try:
         t_ini = Time(inicio_str)
-    except Exception as e:
+    except Exception:
         print("Error al interpretar la fecha/hora. Use el formato YYYY-MM-DD HH:MM:SS.")
         sys.exit(1)
     duracion = float(duracion_str)
 
     location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
     
-        # Opción de horizonte artificial (PeakFinder)
+    # Opción de horizonte artificial (PeakFinder)
     resp_horizonte_artif = input("\n¿Desea ver el horizonte artificial (PeakFinder)? (s/n): ").strip().lower()
+    eventos = None
     if resp_horizonte_artif == 's':
+        dt = 10  # segundos
+        n_steps = int((duracion * 60) / dt) + 1
+        tiempos = t_ini + TimeDelta(np.arange(0, n_steps * dt, dt), format='sec')
+        params_array = [obtener_parametros(t, location) for t in tiempos]
+        eventos = detectar_eventos(tiempos, params_array, location)
+        
         if "Máximo Eclipse" in eventos:
-            def_azi = eventos["Máximo Eclipse"].get("az_sol", None)
-            def_alt = eventos["Máximo Eclipse"].get("alt_sol", None)
+            t_max = eventos["Máximo Eclipse"]['time']
+            altaz_frame = AltAz(obstime=t_max, location=location)
+            luna_pos = get_body("moon", t_max, location=location).transform_to(altaz_frame)
+            def_azi = luna_pos.az.deg
+            def_alt = luna_pos.alt.deg
         else:
+            t_max = None
             def_azi, def_alt = None, None
+            
         print("Puede ajustar manualmente azimut y altitud para la vista del horizonte artificial.")
         azi_str = input(f"Ingrese azimut (°) [default: {def_azi if def_azi is not None else 'sin ajustar'}]: ")
         alt_str = input(f"Ingrese altitud (°) [default: {def_alt if def_alt is not None else 'sin ajustar'}]: ")
@@ -846,9 +802,21 @@ def main():
             alt_val = float(alt_str) if alt_str.strip() != "" else def_alt
         except:
             alt_val = def_alt
-        mostrar_horizonte_artificial(lat, lon, elev, azi_val, alt_val)
+        mostrar_peakfinder(lat, lon, eclipse_time=t_max, luna_azi=azi_val, luna_alt=alt_val,
+                           fov=110, cfg="sm", teleazi=-77.98, telealt=8.91, name="Frómista")
     else:
-        print("No se abrirá horizonte artificial.")
+        print("No se abrirá el horizonte artificial.")
+
+    # Opción de ShadeMap (zoom 13 por defecto)
+    resp_shademap = input("\n¿Desea ver ShadeMap (https://shademap.app/)? (s/n): ").strip().lower()
+    if resp_shademap == 's':
+        if eventos is not None and "Máximo Eclipse" in eventos:
+            t_max = eventos["Máximo Eclipse"]['time']
+        else:
+            t_max = None
+        mostrar_shademap(lat, lon, elev, eclipse_time=t_max, zoom=13, bearing=0, pitch=0, margin=0)
+    else:
+        print("No se abrirá ShadeMap.")
 
     # Opción de cargar fichero de horizonte real
     horizonte_data = None
@@ -865,7 +833,6 @@ def main():
     star_catalog_auto = None
     resp_star_auto = input("\n¿Desea descargar automáticamente el catálogo de estrellas para el campo de totalidad? (s/n): ").strip().lower()
     t_total_range = None
-    eventos = None
     if resp_star_auto == 's':
         dt = 10  # segundos
         n_steps = int((duracion * 60) / dt) + 1
@@ -878,7 +845,7 @@ def main():
             print(f"  Segundo Contacto: {t_total_range[0].iso}")
             print(f"  Tercer Contacto:  {t_total_range[1].iso}")
             t_max = eventos["Máximo Eclipse"]["time"]
-            sun_coord = get_sun(t_max)#.transform_to("icrs")
+            sun_coord = get_sun(t_max)
             star_catalog_auto = descargar_catalogo_estrellas(sun_coord, radius=2.5, mag_limite=10)
         else:
             print("\nNo se detectó eclipse total; no se descargará el catálogo automáticamente.")
@@ -889,7 +856,6 @@ def main():
         params_array = [obtener_parametros(t, location) for t in tiempos]
         eventos = detectar_eventos(tiempos, params_array, location)
 
-    # Mostrar tabla de eventos
     header = f"{'Evento':<20} {'UT':<25} {'Alt. Sol (°)':<12} {'Az. Sol (°)':<12} {'d (°)':<8} {'Magnitud':<10} {'Ángulo':<10}"
     print("\n" + header)
     print("-" * len(header))
@@ -902,7 +868,6 @@ def main():
         angle_str = f"{data['angle']:.2f}" if 'angle' in data else "N/A"
         print(f"{evento:<20} {ut_str:<25} {alt_str:<12} {az_str:<12} {d_str:<8} {mag_str:<10} {angle_str:<10}")
 
-    # Calcular y mostrar el Moon/Sun size ratio usando distancias reales en el Máximo Eclipse
     if "Máximo Eclipse" in eventos:
         t_max = eventos["Máximo Eclipse"]['time']
         ratio, luna_diam, sol_diam = calcular_ratio_moon_sun(t_max, location)
@@ -911,26 +876,21 @@ def main():
         print(f"  Diámetro angular de la Luna: {luna_diam:.3f}°")
         print(f"  Moon/Sun size ratio: {ratio:.3f}")
 
-    # Calcular la duración total del eclipse (Primer a Cuarto Contacto)
     if "Primer Contacto" in eventos and "Cuarto Contacto" in eventos:
         duracion_total = (eventos["Cuarto Contacto"]['time'] - eventos["Primer Contacto"]['time']).sec
         print(f"\nDuración total del eclipse (Primer a Cuarto Contacto): {duracion_total:.0f} segundos")
     else:
         print("\nNo se pudieron determinar los contactos de entrada/salida para calcular la duración total.")
 
-    # Calcular la duración de la totalidad (Segundo a Tercer Contacto), si existe
     if "Segundo Contacto" in eventos and "Tercer Contacto" in eventos:
         duracion_totalidad = (eventos["Tercer Contacto"]['time'] - eventos["Segundo Contacto"]['time']).sec
         print(f"Duración de la totalidad: {duracion_totalidad:.0f} segundos")
     else:
         print("No se detectó eclipse total para calcular la duración de la totalidad.")
 
-
-
-    # Preguntar si se desea la simulación dual (con y sin refracción)
     resp_dual = input("\n¿Desea ver la simulación dual (sin y con refracción atmosférica) simultáneamente? (s/n): ").strip().lower()
     if resp_dual == 's':
-        star_catalog = star_catalog_auto if star_catalog_auto is not None else star_catalog_manual
+        star_catalog = star_catalog_auto if star_catalog_auto is not None else None
         simular_eclipse_dual(tiempos, location, horizon_data=horizonte_data,
                              star_catalog_data=star_catalog, t_total_range=t_total_range)
     else:
@@ -942,5 +902,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
