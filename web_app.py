@@ -16,11 +16,25 @@ from secuencia_sol_luna8 import (
     descargar_catalogo_estrellas
 )
 
-# Función auxiliar para generar la URL de PeakFinder con fecha incluida
-def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm", teleazi=-77.98, telealt=8.91, name="Frómista"):
-    base_url = "https://www.peakfinder.com/es/?"
+# Función auxiliar para generar la URL de PeakFinder con fecha incluida.
+# Si no se introducen manualmente azi y alt, se calcularán a partir de la posición del Sol en el máximo eclipse (st.session_state.t_max)
+def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm",
+                         teleazi=-77.98, telealt=8.91, name="Frómista"):
+    from astropy.coordinates import AltAz
+    # Si no se ingresan manualmente y ya se ha calculado el máximo, se calcula la dirección a partir del Sol
+    if (not azi or azi == "") and "t_max" in st.session_state:
+        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
+        altaz_frame = AltAz(obstime=st.session_state.t_max, location=location_obj)
+        sun_pos = get_sun(st.session_state.t_max).transform_to(altaz_frame)
+        azi = f"{sun_pos.az.deg:.2f}"
+    if (not alt or alt == "") and "t_max" in st.session_state:
+        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
+        altaz_frame = AltAz(obstime=st.session_state.t_max, location=location_obj)
+        sun_pos = get_sun(st.session_state.t_max).transform_to(altaz_frame)
+        alt = f"{sun_pos.alt.deg:.2f}"
     # Convertir eclipse_time a formato ISO forzado (ej. 2026-08-12T17:30:00Z)
     date_str = eclipse_time.iso.split('.')[0].replace(" ", "T") + "Z"
+    base_url = "https://www.peakfinder.com/es/?"
     params = f"lat={lat}&lng={lon}&ele={int(elev)}&zoom=5"
     if azi is not None and azi != "":
         params += f"&azi={azi}"
@@ -60,7 +74,7 @@ with col1:
 with col2:
     # Hora por defecto: 17:30
     hora = st.time_input("⏰ Hora inicial (UT)", datetime.strptime("17:30", "%H:%M").time())
-# Duración de simulación con default 120 minutos
+# Duración de simulación por defecto: 120 minutos
 duracion_min = st.slider("⏱️ Duración de simulación (minutos)", 5, 120, 120)
 
 # Calcular la fecha/hora del eclipse a partir de los inputs
@@ -80,6 +94,12 @@ map_data = st_folium(m, height=400, width=700)
 if map_data["last_clicked"] is not None:
     st.session_state.coords = map_data["last_clicked"]
 
+# --- Opción para introducir manualmente las coordenadas ---
+if st.checkbox("¿Deseas ingresar manualmente las coordenadas de observación?"):
+    lat_manual = st.number_input("Latitud (manual)", value=st.session_state.coords.get("lat", 40.4168))
+    lon_manual = st.number_input("Longitud (manual)", value=st.session_state.coords.get("lng", -3.7038))
+    st.session_state.coords = {"lat": lat_manual, "lng": lon_manual}
+
 lat = st.session_state.coords["lat"]
 lon = st.session_state.coords["lng"]
 st.write(f"📍 Coordenadas seleccionadas: **Latitud:** {lat:.5f}°, **Longitud:** {lon:.5f}°")
@@ -98,6 +118,7 @@ elev = st.number_input("🗻 Elevación del terreno (m)", value=elev_default)
 # --- Opciones Avanzadas ---
 with st.expander("🔧 Opciones Avanzadas"):
     st.markdown("#### Horizonte Artificial (PeakFinder)")
+    # Si el usuario no ingresa manualmente, se utilizarán los valores calculados del Sol en t_max (si existe)
     azi_input = st.text_input("Azimut (°) para horizonte artificial", value="")
     alt_input = st.text_input("Altitud (°) para horizonte artificial", value="")
     if st.button("Generar enlace a PeakFinder"):
@@ -176,6 +197,7 @@ if st.button("🔍 Calcular eventos del eclipse"):
                 st.warning("No se detectó eclipse total; el catálogo de estrellas no se descargará.")
     except Exception as e:
         st.error(f"❌ Error durante el cálculo: {e}")
+
 
 
 
