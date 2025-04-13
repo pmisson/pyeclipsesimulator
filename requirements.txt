@@ -48,3 +48,25 @@ typing_extensions==4.13.2
 tzdata==2025.2
 urllib3==2.4.0
 watchdog==6.0.0
+# Requisitos esenciales para la app Streamlit
+streamlit
+streamlit-folium
+folium
+
+# Librerías científicas y de simulación astronómica
+astropy
+numpy
+matplotlib
+pandas
+
+# APIs y geolocalización
+requests
+geopy
+astroquery
+
+# Manejo de archivos temporales y backend de gráficos
+Pillow
+
+# Librerías adicionales usadas en funciones avanzadas
+RefractionShift
+AstroAtmosphere
