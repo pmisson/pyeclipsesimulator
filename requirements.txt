@@ -51,3 +51,4 @@ watchdog==6.0.0
 folium
 streamlit-folium
 geopy
+astroquery
