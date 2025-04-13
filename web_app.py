@@ -339,6 +339,17 @@ with st.expander("🔧 Opciones Avanzadas"):
     st.markdown("---")
     descargar_catalogo_flag = st.checkbox("Descargar catálogo de estrellas automáticamente (para el campo de totalidad)")
 
+# --- Recursos adicionales ---
+st.markdown("---")
+st.markdown("### Recursos adicionales")
+st.markdown("#### Mapas meteorológicos y de sombras")
+st.markdown("[Mapa meteorológico y de sombras: 12 de Agosto 2026 Eclipse](https://pmisson.users.earthengine.app/view/clouds-12-august-2026-eclipse)")
+st.markdown("[Mapa meteorológico: 2 de Agosto 2027 Eclipse](https://pmisson.users.earthengine.app/view/clouds-eclipse-2nd-of-august-2027)")
+st.markdown("[Mapa meteorológico: 26 de Enero 2028 Eclipse](https://pmisson.users.earthengine.app/view/clouds-eclipse-26th-of-january-2028)")
+
+
+st.markdown("#### Más información sobre eclipses")
+st.markdown("[Eclipseo.es](https://eclipseo.es)")
 # --- Botón para ejecutar el cálculo de eventos del eclipse ---
 if st.button("🔍 Calcular eventos del eclipse"):
     st.info("Calculando eventos del eclipse...")
@@ -548,12 +559,34 @@ if st.button("▶️ Mostrar simulación del eclipse (dual: con(básico) y sin r
     except Exception as e:
         st.error(f"❌ Error en la simulación dual: {e}")
 
+# --- Agradecimientos ---
+st.markdown("---")
+st.markdown("### Agradecimientos")
+st.markdown("Esta aplicación se ha desarrollado gracias al apoyo de:")
+st.markdown("- **Beca UNA4CAREER UCM.es** ([UNA4CAREER](https://www.una4career.eu/) | [GUAIX UCM](https://guaix.fis.ucm.es/))")
+st.markdown("- **Beca EMERGIA**: Este trabajo ha sido financiado por la ayuda EMERGIA20_DGP_EMEC_2023_00431, concedida por la Consejería de Universidad, Investigación e Innovación de la Junta de Andalucía, y se lleva a cabo en el [Instituto de Astrofísica de Andalucía-CSIC](https://www.iaa.csic.es/).")
+st.markdown("This project has received funding from the European Union’s Horizon 2020 Research and Innovation Programme under the Marie Sklodowska-Curie grant agreement No. 847635.")
 
-
-
-
-
-
-    
-
-
+# Mostrar logos asociados en 4 columnas
+st.markdown("#### Logos asociados")
+col1, col2, col3, col4 = st.columns(4)
+col1.image(
+    "https://www.juntadeandalucia.es/sites/default/files/2023-02/normal_1.jpg", 
+    caption="Junta de Andalucía", 
+    width=150
+)
+col2.image(
+    "https://www.ucm.es/data/cont/docs/3-2016-07-21-Marca%20UCM%20logo%20negro.png", 
+    caption="UCM", 
+    width=150
+)
+col3.image(
+    "https://somma.es/wp-content/uploads/2022/04/IAA-CSIC.png", 
+    caption="IAA-CSIC", 
+    width=150
+)
+col4.image(
+    "https://www.uib.no/sites/w3.uib.no/files/styles/content_main/public/media/marie_curie_logo.png?itok=zR0htrxL", 
+    caption="Marie Curie", 
+    width=200
+)
