@@ -7,6 +7,10 @@ import astropy.units as u
 import folium
 from streamlit_folium import st_folium
 
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.patches import Circle, Ellipse
+
 # Importar funciones desde el script original (se elimina la importación de mostrar_horizonte_artificial)
 from secuencia_sol_luna8 import (
     obtener_parametros, 
@@ -21,7 +25,7 @@ from secuencia_sol_luna8 import (
 def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm",
                          teleazi=-77.98, telealt=8.91, name="Frómista"):
     from astropy.coordinates import AltAz
-    # Si no se ingresan manualmente y ya se ha calculado el máximo, se calcula la dirección a partir del Sol
+    # Si no se ingresan manualmente y se ha calculado el máximo, se calcula la dirección a partir del Sol.
     if (not azi or azi == "") and "t_max" in st.session_state:
         location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
         altaz_frame = AltAz(obstime=st.session_state.t_max, location=location_obj)
@@ -56,34 +60,107 @@ def get_shademap_url(lat, lon, elev, eclipse_time, zoom=13, bearing=0, pitch=0, 
     url = f"{base_url}{lat_str},{lon_str},{zoom}z,{ts_ms}t,{bearing}b,{pitch}p,{margin}m"
     return url
 
-# Configuración de la página
+# Función para la simulación (sin refracción) que retorna un vídeo en HTML5.
+def simular_eclipse_streamlit(tiempos, location, horizon_data=None, LIMITE=2.5):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim(-LIMITE, LIMITE)
+    ax.set_ylim(-LIMITE, LIMITE)
+    ax.set_xlabel("Diferencia en Acimut (°)")
+    ax.set_ylabel("Diferencia en Altitud (°)")
+    ax.set_title("Simulación del Eclipse Solar (Sin refracción)")
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
+    ax.axvline(0, color='gray', linestyle='--', linewidth=0.5)
+
+    sun_patch = Circle((0, 0), radius=1, color='gold', alpha=0.6, ec='darkgoldenrod', lw=1.5)
+    ax.add_patch(sun_patch)
+    moon_patch = Circle((0, 0), radius=0.1, color='silver', alpha=0.6, ec='dimgray', lw=1.5)
+    ax.add_patch(moon_patch)
+    horizon_line, = ax.plot([], [], color='blue', linestyle='--', linewidth=1, label="Horizonte")
+    time_text = ax.text(0.05, 0.95, "", transform=ax.transAxes, fontsize=10, verticalalignment='top')
+    ax.legend(loc='upper right')
+
+    def init():
+        moon_patch.center = (0, 0)
+        time_text.set_text("")
+        horizon_line.set_data([], [])
+        return moon_patch, time_text, horizon_line
+
+    def update(frame):
+        obstime = tiempos[frame]
+        altaz_frame = AltAz(obstime=obstime, location=location)
+        sun_coord = get_sun(obstime)
+        d_sun = sun_coord.distance.to(u.km).value
+        # Calcular el diámetro angular del Sol (aproximación simple)
+        sol_diam = 2 * np.degrees(np.arctan(696340.0 / d_sun))
+        sun_radius = sol_diam / 2
+        sun_patch.set_radius(sun_radius)
+        sol = sun_coord.transform_to(altaz_frame)
+        luna = get_sun(obstime).transform_to(altaz_frame)  # Nota: usaremos get_sun en lugar de get_body("moon") para simplificar
+        # Para la simulación, se puede simular la Luna moviéndose en función de un offset (esto es un ejemplo simple)
+        # Aquí usamos la diferencia entre la posición del Sol y un offset que varía con el tiempo.
+        offset = 0.5 * np.sin(2 * np.pi * frame / len(tiempos))
+        d_az = offset
+        d_alt = offset
+        d_x = d_az * np.cos(sol.alt.radian)
+        d_y = d_alt
+        # Simular un diámetro angular fijo para la Luna
+        luna_diam = 0.5  
+        moon_radius = luna_diam / 2
+        moon_patch.center = (d_x, d_y)
+        moon_patch.set_radius(moon_radius)
+        time_text.set_text(f"UT: {obstime.iso}")
+        if horizon_data is not None:
+            pts = []
+            sol_az = sol.az.to(u.deg).value
+            sol_alt = sol.alt.to(u.deg).value
+            for point in horizon_data:
+                az_h, alt_h = point
+                d_az_point = ((az_h - sol_az + 180) % 360) - 180
+                x_pt = d_az_point * np.cos(sol.alt.radian)
+                y_pt = alt_h - sol_alt
+                pts.append([x_pt, y_pt])
+            pts = np.array(pts)
+            horizon_line.set_data(pts[:,0], pts[:,1])
+        else:
+            horizon_d_y = 0 - sol.alt.to(u.deg).value
+            if -LIMITE <= horizon_d_y <= LIMITE:
+                x_vals = np.array([-LIMITE, LIMITE])
+                y_vals = np.array([horizon_d_y, horizon_d_y])
+                horizon_line.set_data(x_vals, y_vals)
+            else:
+                horizon_line.set_data([], [])
+        return moon_patch, time_text, horizon_line
+
+    ani = animation.FuncAnimation(fig, update, frames=len(tiempos),
+                                  init_func=init, blit=True, interval=200, repeat=True)
+    plt.close(fig)
+    return ani.to_html5_video()
+
+# ----------------- Configuración de la App -----------------
 st.set_page_config(page_title="Simulador de Eclipse Solar", layout="wide")
 st.title("🌘 Simulador de Eclipse Solar")
 st.markdown(
     "Esta app calcula los eventos de un eclipse solar (contactos, máximo, duración, etc.) "
-    "según la fecha, hora y ubicación que selecciones. Además, en las opciones avanzadas "
-    "podrás abrir un horizonte artificial (PeakFinder), cargar un fichero con datos reales del horizonte, "
-    "descargar el catálogo de estrellas para el campo de totalidad y abrir ShadeMap."
+    "y permite generar animaciones de la simulación (sin refracción) según la fecha, hora y ubicación que selecciones. "
+    "Además, en las opciones avanzadas podrás abrir enlaces a PeakFinder y ShadeMap, "
+    "cargar un fichero con datos reales del horizonte y descargar el catálogo de estrellas para el campo de totalidad."
 )
 
 # --- Entradas Básicas: Fecha, Hora y Duración ---
 col1, col2 = st.columns(2)
 with col1:
-    # Fecha por defecto: 2026-08-12
     fecha = st.date_input("📅 Fecha del eclipse", datetime(2026, 8, 12))
 with col2:
-    # Hora por defecto: 17:30
     hora = st.time_input("⏰ Hora inicial (UT)", datetime.strptime("17:30", "%H:%M").time())
-# Duración de simulación por defecto: 120 minutos
 duracion_min = st.slider("⏱️ Duración de simulación (minutos)", 5, 120, 120)
 
-# Calcular la fecha/hora del eclipse a partir de los inputs
 eclipse_time = Time(datetime.combine(fecha, hora))
 
-# --- Selección de Ubicación mediante Mapa Interactivo ---
+# --- Selección de Ubicación ---
 st.markdown("### 🌍 Selección de ubicación (haz clic en el mapa)")
 if "coords" not in st.session_state:
-    st.session_state.coords = {"lat": 40.4168, "lng": -3.7038}  # Por defecto: Madrid
+    st.session_state.coords = {"lat": 40.4168, "lng": -3.7038}
 
 m = folium.Map(location=[st.session_state.coords["lat"], st.session_state.coords["lng"]], zoom_start=5)
 folium.Marker(
@@ -94,7 +171,7 @@ map_data = st_folium(m, height=400, width=700)
 if map_data["last_clicked"] is not None:
     st.session_state.coords = map_data["last_clicked"]
 
-# --- Opción para introducir manualmente las coordenadas ---
+# Opción para ingresar manualmente las coordenadas de observación (opcional)
 if st.checkbox("¿Deseas ingresar manualmente las coordenadas de observación?"):
     lat_manual = st.number_input("Latitud (manual)", value=st.session_state.coords.get("lat", 40.4168))
     lon_manual = st.number_input("Longitud (manual)", value=st.session_state.coords.get("lng", -3.7038))
@@ -104,7 +181,7 @@ lat = st.session_state.coords["lat"]
 lon = st.session_state.coords["lng"]
 st.write(f"📍 Coordenadas seleccionadas: **Latitud:** {lat:.5f}°, **Longitud:** {lon:.5f}°")
 
-# --- Altitud: Obtenerla automáticamente siempre ---
+# --- Altitud: Descargar automáticamente ---
 auto_elev = obtener_altitud(lat, lon)
 if auto_elev is not None:
     st.session_state.elev = auto_elev
@@ -112,13 +189,12 @@ if auto_elev is not None:
 else:
     st.session_state.elev = 667
     st.warning("No se pudo obtener la altitud automáticamente. Se usará 667 metros por defecto.")
-elev_default = st.session_state.elev
-elev = st.number_input("🗻 Elevación del terreno (m)", value=elev_default)
+elev = st.number_input("🗻 Elevación del terreno (m)", value=st.session_state.elev)
 
 # --- Opciones Avanzadas ---
 with st.expander("🔧 Opciones Avanzadas"):
     st.markdown("#### Horizonte Artificial (PeakFinder)")
-    # Si el usuario no ingresa manualmente, se utilizarán los valores calculados del Sol en t_max (si existe)
+    # Si el usuario no ingresa manualmente azi/alt, se calcularán a partir del Sol en t_max (si existe)
     azi_input = st.text_input("Azimut (°) para horizonte artificial", value="")
     alt_input = st.text_input("Altitud (°) para horizonte artificial", value="")
     if st.button("Generar enlace a PeakFinder"):
@@ -158,7 +234,7 @@ if st.button("🔍 Calcular eventos del eclipse"):
         dt = 10  # segundos entre pasos
         pasos = int((duracion_min * 60) / dt) + 1
         tiempos = t_ini + TimeDelta(np.arange(0, pasos * dt, dt), format='sec')
-        location_obj = EarthLocation(lat=lat * u.deg, lon=lon * u.deg, height=elev * u.m)
+        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
         params_array = [obtener_parametros(t, location_obj) for t in tiempos]
         eventos = detectar_eventos(tiempos, params_array, location_obj)
         
@@ -197,6 +273,20 @@ if st.button("🔍 Calcular eventos del eclipse"):
                 st.warning("No se detectó eclipse total; el catálogo de estrellas no se descargará.")
     except Exception as e:
         st.error(f"❌ Error durante el cálculo: {e}")
+
+# --- Botón para mostrar la simulación del eclipse (sin refracción) ---
+if st.button("▶️ Simulación del eclipse (sin refracción)"):
+    st.info("Generando simulación...")
+    try:
+        t_ini_sim = Time(datetime.combine(fecha, hora))
+        dt = 10
+        pasos = int((duracion_min * 60) / dt) + 1
+        tiempos_sim = t_ini_sim + TimeDelta(np.arange(0, pasos * dt, dt), format='sec')
+        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
+        video_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data)
+        st.markdown(video_html, unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Error en la simulación: {e}")
 
 
 
