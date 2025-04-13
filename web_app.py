@@ -145,7 +145,6 @@ def simular_eclipse_streamlit(tiempos, location, horizon_data=None, LIMITE=2.5, 
     return ani.to_html5_video()
     
 # Función para la simulación dual adaptada para Streamlit
-
 def simular_eclipse_dual_streamlit(tiempos, location, horizon_data=None, star_catalog_data=None, t_total_range=None, LIMITE=2.5, anim_interval=200):
     from RefractionShift.refraction_shift import refraction
     Refraction_inst = refraction(288.15, 101325, location.height.value)
@@ -184,6 +183,10 @@ def simular_eclipse_dual_streamlit(tiempos, location, horizon_data=None, star_ca
         return moon_patch1, moon_patch2, time_text1, time_text2
 
     def update(frame):
+        from secuencia_sol_luna8 import aplicar_refraction, angular_diameter, R_SUN, R_MOON
+        from astropy.coordinates import get_sun, get_body, AltAz
+        import astropy.units as u
+
         obstime = tiempos[frame]
         altaz_frame = AltAz(obstime=obstime, location=location)
 
@@ -224,7 +227,8 @@ def simular_eclipse_dual_streamlit(tiempos, location, horizon_data=None, star_ca
         time_text2.set_text(f"UT: {obstime.iso}")
         return moon_patch1, moon_patch2, time_text1, time_text2
 
-    ani = animation.FuncAnimation(fig, update, frames=len(tiempos), init_func=init, blit=True, interval=anim_interval, repeat=True)
+    ani = animation.FuncAnimation(fig, update, frames=len(tiempos),
+                                  init_func=init, blit=True, interval=anim_interval, repeat=True)
     plt.close(fig)
     return ani.to_html5_video()    
 
@@ -376,7 +380,12 @@ if st.button("▶️ Mostrar simulación del eclipse (sin refracción)"):
         tiempos_sim = t_ini_sim + TimeDelta(np.arange(0, pasos_sim * dt_sim, dt_sim), format='sec')
         location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
         video_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data=horizon_data, LIMITE=2.5, anim_interval=200)
-        st.markdown(video_html, unsafe_allow_html=True)
+        video_html_mod = f'''
+        <video width="100%" controls playsinline>
+            {video_html}
+            Tu navegador no soporta la etiqueta de video HTML5.
+        </video>'''
+        st.markdown(video_html_mod, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"❌ Error en la simulación: {e}")
         
@@ -394,13 +403,6 @@ if st.button("▶️ Mostrar simulación del eclipse (dual: con(basico) y sin re
         from RefractionShift.refraction_shift import refraction
         Refraction_inst = refraction(288.15, 101325, location_obj.height.value)
         lmbda = 550e-9
-
-        import matplotlib.pyplot as plt
-        import matplotlib.animation as animation
-        from matplotlib.patches import Circle
-        import numpy as np
-        from io import BytesIO
-        import base64
 
         progress_bar = st.progress(0)
 
@@ -520,8 +522,12 @@ if st.button("▶️ Mostrar simulación del eclipse (dual: con(basico) y sin re
         progress_bar.empty()
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode()
-        video_html = f'<video width="100%" controls><source src="data:video/mp4;base64,{video_base64}" type="video/mp4"></video>'
-        st.markdown(video_html, unsafe_allow_html=True)
+            video_html = f'''
+            <video width="100%" controls playsinline>
+                <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+                Tu navegador no soporta la etiqueta de video HTML5.
+            </video>'''
+            st.markdown(video_html, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"❌ Error en la simulación dual: {e}")
 

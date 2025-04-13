@@ -375,14 +375,21 @@ if st.button("▶️ Mostrar simulación del eclipse (sin refracción)"):
         pasos_sim = int((duracion_min * 60) / dt_sim) + 1
         tiempos_sim = t_ini_sim + TimeDelta(np.arange(0, pasos_sim * dt_sim, dt_sim), format='sec')
         location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-        video_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data=horizon_data, LIMITE=2.5, anim_interval=200)
-        st.markdown(video_html, unsafe_allow_html=True)
+        #video_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data=horizon_data, LIMITE=2.5, anim_interval=200)
+        # Suponiendo que 'video_html' contiene la parte del código que se encarga de montar el video,
+        # podrías modificarlo o envolverlo con mejoras, por ejemplo:
+        video_html_mod = f'''
+        <video width="100%" controls playsinline>
+            {video_html}
+            Tu navegador no soporta la etiqueta de video HTML5.
+        </video>'''
+        st.markdown(video_html_mod, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"❌ Error en la simulación: {e}")
         
 # --- Simulación dual ---
 # --- Botón para mostrar la simulación del eclipse (dual: con y sin refracción) ---
-if st.button("▶️ Mostrar simulación del eclipse (dual: con y sin refracción)[Tarda mucho, no simular más de 5 min]"):
+if st.button("▶️ Mostrar simulación del eclipse (dual: con(basico) y sin refracción)[Tarda mucho, no simular más de 5 min]"):
     st.info("Generando simulación dual...")
     try:
         t_ini_sim = Time(datetime.combine(fecha, hora))
@@ -520,10 +527,15 @@ if st.button("▶️ Mostrar simulación del eclipse (dual: con y sin refracció
         progress_bar.empty()
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode()
-        video_html = f'<video width="100%" controls><source src="data:video/mp4;base64,{video_base64}" type="video/mp4"></video>'
-        st.markdown(video_html, unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"❌ Error en la simulación dual: {e}")
+            video_html = f'''
+            <video width="100%" controls playsinline>
+                <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+                <source src="data:video/webm;base64,{video_webm_base64}" type="video/webm">
+                Tu navegador no soporta la etiqueta de video HTML5.
+            </video>'''
+            st.markdown(video_html, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"❌ Error en la simulación dual: {e}")
 
 
 
