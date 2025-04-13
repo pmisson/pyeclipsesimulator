@@ -139,11 +139,20 @@ def simular_eclipse_streamlit(tiempos, location, horizon_data=None, LIMITE=2.5, 
                 horizon_line.set_data([], [])
         return sun_patch, moon_patch, time_text, horizon_line
 
-    ani = animation.FuncAnimation(fig, update, frames=len(tiempos),
-                                  init_func=init, blit=True, interval=anim_interval, repeat=True)
+    ani = animation.FuncAnimation(
+        fig, update, frames=len(tiempos), init_func=init,
+        blit=True, interval=anim_interval, repeat=True
+    )
     plt.close(fig)
-    return ani.to_html5_video()
-    
+    # Guardar la animación como GIF usando PillowWriter
+    writer = animation.PillowWriter(fps=5)
+    gif_path = "/tmp/eclipse_sin_refraccion.gif"
+    ani.save(gif_path, writer=writer)
+    with open(gif_path, "rb") as f:
+        gif_base64 = base64.b64encode(f.read()).decode()
+    # Retorna el HTML con el GIF
+    return f'<img width="100%" src="data:image/gif;base64,{gif_base64}">'
+
 # Función para la simulación dual adaptada para Streamlit
 def simular_eclipse_dual_streamlit(tiempos, location, horizon_data=None, star_catalog_data=None, t_total_range=None, LIMITE=2.5, anim_interval=200):
     from RefractionShift.refraction_shift import refraction
@@ -227,10 +236,18 @@ def simular_eclipse_dual_streamlit(tiempos, location, horizon_data=None, star_ca
         time_text2.set_text(f"UT: {obstime.iso}")
         return moon_patch1, moon_patch2, time_text1, time_text2
 
-    ani = animation.FuncAnimation(fig, update, frames=len(tiempos),
-                                  init_func=init, blit=True, interval=anim_interval, repeat=True)
+    ani = animation.FuncAnimation(
+        fig, update, frames=len(tiempos),
+        init_func=init, blit=True, interval=anim_interval, repeat=True
+    )
     plt.close(fig)
-    return ani.to_html5_video()    
+    # Generar la animación dual como GIF
+    writer = animation.PillowWriter(fps=5)
+    gif_path = "/tmp/eclipse_dual.gif"
+    ani.save(gif_path, writer=writer)
+    with open(gif_path, "rb") as f:
+        gif_base64 = base64.b64encode(f.read()).decode()
+    return f'<img width="100%" src="data:image/gif;base64,{gif_base64}">'
 
 # ----------------- Configuración de la App -----------------
 st.set_page_config(page_title="Simulador de Eclipse Solar", layout="wide")
@@ -379,19 +396,15 @@ if st.button("▶️ Mostrar simulación del eclipse (sin refracción)"):
         pasos_sim = int((duracion_min * 60) / dt_sim) + 1
         tiempos_sim = t_ini_sim + TimeDelta(np.arange(0, pasos_sim * dt_sim, dt_sim), format='sec')
         location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-        video_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data=horizon_data, LIMITE=2.5, anim_interval=200)
-        video_html_mod = f'''
-        <video width="100%" controls playsinline>
-            {video_html}
-            Tu navegador no soporta la etiqueta de video HTML5.
-        </video>'''
-        st.markdown(video_html_mod, unsafe_allow_html=True)
+        # Ahora simular_eclipse_streamlit retorna HTML con el GIF generado
+        gif_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data=horizon_data, LIMITE=2.5, anim_interval=200)
+        st.markdown(gif_html, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"❌ Error en la simulación: {e}")
         
 # --- Simulación dual ---
 # --- Botón para mostrar la simulación del eclipse (dual: con y sin refracción) ---
-if st.button("▶️ Mostrar simulación del eclipse (dual: con(basico) y sin refracción)[Tarda mucho, no simular más de 5 min]"):
+if st.button("▶️ Mostrar simulación del eclipse (dual: con(básico) y sin refracción)[Tarda mucho, no simular más de 5 min]"):
     st.info("Generando simulación dual...")
     try:
         t_ini_sim = Time(datetime.combine(fecha, hora))
@@ -516,18 +529,22 @@ if st.button("▶️ Mostrar simulación del eclipse (dual: con(basico) y sin re
             progress_bar.progress((frame + 1) / len(tiempos_sim))
             return moon_patch1, moon_patch2, time_text1, time_text2, horizon_line1, horizon_line2
 
-        ani = animation.FuncAnimation(fig, update, frames=len(tiempos_sim), init_func=init, blit=True, interval=200, repeat=True)
-        video_path = "/tmp/eclipse_dual.mp4"
-        ani.save(video_path, writer="ffmpeg", fps=5)
+        ani = animation.FuncAnimation(
+            fig, update, frames=len(tiempos_sim),
+            init_func=init, blit=True, interval=200, repeat=True
+        )
+        plt.close(fig)
+        # Guardar la animación dual como GIF
+        writer = animation.PillowWriter(fps=5)
+        gif_path = "/tmp/eclipse_dual.gif"
+        ani.save(gif_path, writer=writer)
         progress_bar.empty()
-        with open(video_path, "rb") as f:
-            video_base64 = base64.b64encode(f.read()).decode()
-            video_html = f'''
-            <video width="100%" controls playsinline>
-                <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
-                Tu navegador no soporta la etiqueta de video HTML5.
-            </video>'''
-            st.markdown(video_html, unsafe_allow_html=True)
+        with open(gif_path, "rb") as f:
+            gif_base64 = base64.b64encode(f.read()).decode()
+            gif_html = f'''
+            <img width="100%" src="data:image/gif;base64,{gif_base64}">
+            '''
+            st.markdown(gif_html, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"❌ Error en la simulación dual: {e}")
 
