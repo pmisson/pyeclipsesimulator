@@ -460,3 +460,5 @@ col3.image("https://somma.es/wp-content/uploads/2022/04/IAA-CSIC.png", caption="
 col4.image("https://www.uib.no/sites/w3.uib.no/files/styles/content_main/public/media/marie_curie_logo.png?itok=zR0htrxL", caption="Marie Curie", width=100)
 
 
+
+

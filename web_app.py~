@@ -564,7 +564,7 @@ st.markdown("---")
 st.markdown("### Agradecimientos")
 st.markdown("Esta aplicación se ha desarrollado gracias al apoyo de:")
 st.markdown("- **Beca UNA4CAREER UCM.es** ([UNA4CAREER](https://www.una4career.eu/) | [GUAIX UCM](https://guaix.fis.ucm.es/))")
-st.markdown("- **Beca EMERGIA**: Este trabajo ha sido financiado por la ayuda EMERGIA20_DGP_EMEC_2023_00431, concedida por la Consejería de Universidad, Investigación e Innovación de la Junta de Andalucía.")
+st.markdown("- **Beca EMERGIA**: Este trabajo ha sido financiado por la ayuda EMERGIA20_DGP_EMEC_2023_00431, concedida por la Consejería de Universidad, Investigación e Innovación de la Junta de Andalucía, y se lleva a cabo en el [Instituto de Astrofísica de Andalucía-CSIC](https://www.iaa.csic.es/).")
 st.markdown("This project has received funding from the European Union’s Horizon 2020 Research and Innovation Programme under the Marie Sklodowska-Curie grant agreement No. 847635.")
 
 # Mostrar logos asociados en 4 columnas

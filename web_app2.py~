@@ -167,68 +167,6 @@ def simular_eclipse_streamlit(tiempos, location, horizon=None, use_refraction=Fa
     # Selección de título según tipo
     title = "Con refracción" if use_refraction else "Sin refracción"
     fig, ax, sun_patch, moon_patch, txt = _create_axes(title, limite)
-    # Añadir línea de horizonte
-    horizon_line, = ax.plot([], [], color='blue', linestyle='--', linewidth=1)
-    RefInst = None
-    lmbda = None
-    if use_refraction:
-        RefInst = refraction_shift(288.15, 101325, location.height.value)
-        lmbda = 550e-9
-
-    def update(i):
-        t = tiempos[i]
-        altaz = AltAz(obstime=t, location=location)
-        sol = get_sun(t).transform_to(altaz)
-        lun = get_body('moon', t, location=location).transform_to(altaz)
-        d_sun = get_sun(t).distance.to(u.km).value
-        d_lun = get_body('moon', t, location=location).distance.to(u.km).value
-        r_sol = angular_diameter(R_SUN, d_sun)/2
-        r_lun = angular_diameter(R_MOON, d_lun)/2
-        sun_patch.set_radius(r_sol)
-        # Cálculo posiciones con/sin refracción
-        if use_refraction and RefInst:
-            alt_s, az_s = aplicar_refraction(sol.alt.deg, sol.az.deg, d_sun, RefInst, lmbda)
-            alt_m, az_m = aplicar_refraction(lun.alt.deg, lun.az.deg, d_lun, RefInst, lmbda)
-        else:
-            alt_s, az_s = sol.alt.deg, sol.az.deg
-            alt_m, az_m = lun.alt.deg, lun.az.deg
-        dx = (az_m - az_s)*np.cos(np.deg2rad(alt_s))
-        dy = alt_m - alt_s
-        moon_patch.center = (dx, dy)
-        moon_patch.set_radius(r_lun)
-        txt.set_text(t.iso)
-        # Dibujar horizonte
-        if horizon is not None:
-            pts = []
-            sol_az = az_s
-            sol_alt = alt_s
-            for az_h, alt_h in horizon:
-                d_azp = ((az_h - sol_az + 180) % 360) - 180
-                x_p = d_azp * np.cos(np.deg2rad(sol_alt))
-                y_p = alt_h - sol_alt
-                pts.append([x_p, y_p])
-            pts = np.array(pts)
-            horizon_line.set_data(pts[:,0], pts[:,1])
-        else:
-            # horizonte plano al nivel de 0 altitud
-            y0 = - sol.alt.deg
-            if -limite <= y0 <= limite:
-                x_vals = np.array([-limite, limite])
-                y_vals = np.array([y0, y0])
-                horizon_line.set_data(x_vals, y_vals)
-            else:
-                horizon_line.set_data([], [])
-        return sun_patch, moon_patch, txt, horizon_line
-
-    ani = animation.FuncAnimation(fig, update, frames=len(tiempos), blit=True)
-    tmp = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
-    ani.save(tmp.name, writer=animation.PillowWriter(fps=fps))
-    plt.close(fig)
-    return tmp.name
-    """Genera una animación GIF de la simulación de eclipse, opcionalmente con refracción."""
-    # Selección de título según tipo
-    title = "Con refracción" if use_refraction else "Sin refracción"
-    fig, ax, sun_patch, moon_patch, txt = _create_axes(title, limite)
     RefInst = None
     lmbda = None
     if use_refraction:
@@ -458,5 +396,7 @@ col1.image("https://www.juntadeandalucia.es/sites/default/files/2023-02/normal_1
 col2.image("https://www.ucm.es/data/cont/docs/3-2016-07-21-Marca%20UCM%20logo%20negro.png", caption="UCM", width=100)
 col3.image("https://somma.es/wp-content/uploads/2022/04/IAA-CSIC.png", caption="IAA-CSIC", width=100)
 col4.image("https://www.uib.no/sites/w3.uib.no/files/styles/content_main/public/media/marie_curie_logo.png?itok=zR0htrxL", caption="Marie Curie", width=100)
+
+
 
 
