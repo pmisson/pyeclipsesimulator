@@ -326,19 +326,25 @@ lng = st.session_state.coords['lng']
 st.write(f"**Coordenadas**: {lat:.5f}°, {lng:.5f}°")
 
 # Mapa interactivo
-m = folium.Map(location=[lat,lng], zoom_start=6)
-folium.Marker([lat,lng], tooltip="Click en el mapa para seleccionar ubicación").add_to(m)
+# Mostrar mapa con marcador en coordenadas actuales
+e_lat, e_lng = st.session_state.coords['lat'], st.session_state.coords['lng']
+m = folium.Map(location=[e_lat, e_lng], zoom_start=6)
+folium.Marker([e_lat, e_lng], tooltip="Ubicación seleccionada").add_to(m)
 map_data = st_folium(m, width=700, height=300)
-if map_data and map_data.get("last_clicked"):
-    lat_new = map_data["last_clicked"]["lat"]
-    lng_new = map_data["last_clicked"]["lng"]
-    st.session_state.coords = {'lat': lat_new, 'lng': lng_new}
-    lat, lng = lat_new, lng_new
-    st.success(f"Coordenadas seleccionadas: {lat:.5f}°, {lng:.5f}°")
-    # Redibujar marcador en nueva ubicación
-    m2 = folium.Map(location=[lat,lng], zoom_start=6)
-    folium.Marker([lat,lng], tooltip="Ubicación seleccionada").add_to(m2)
-    st_folium(m2, width=700, height=300)
+# Actualizar solo si realmente hubo un clic diferente
+def clicked_and_changed(map_data):
+    if not map_data:
+        return False
+    clicked = map_data.get("last_clicked")
+    if not clicked:
+        return False
+    return (clicked["lat"], clicked["lng"]) != (e_lat, e_lng)
+
+if clicked_and_changed(map_data):
+    new_lat = map_data["last_clicked"]["lat"]
+    new_lng = map_data["last_clicked"]["lng"]
+    st.session_state.coords = {'lat': new_lat, 'lng': new_lng}
+    st.experimental_rerun()
 
 # Altitud
 elev = obtener_altitud(lat,lng) or 0

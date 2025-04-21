@@ -1,592 +1,468 @@
+#!/usr/bin/env python3
+"""
+Simulador de Eclipse Solar con Streamlit.
+Requiere:
+  - streamlit, numpy, astropy, folium, streamlit-folium,
+    matplotlib, requests, geopy, astroquery, RefractionShift
+"""
 import streamlit as st
 from datetime import datetime
 import numpy as np
 from astropy.time import Time, TimeDelta
-from astropy.coordinates import EarthLocation, get_sun, get_body, SkyCoord, AltAz
+from astropy.coordinates import EarthLocation, AltAz, get_sun, get_body, SkyCoord
 import astropy.units as u
-import folium
-from streamlit_folium import st_folium
+import requests
+from geopy.geocoders import Nominatim
+from astroquery.vizier import Vizier
+from RefractionShift.refraction_shift import refraction as refraction_shift
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.patches import Circle, Ellipse
-import webbrowser
+import folium
+from streamlit_folium import st_folium
 import pandas as pd
-from io import BytesIO
 import base64
 import tempfile
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-import time
 import os
 
-# Importar funciones desde el script original (excepto las de simulación, que se definen localmente aquí)
-from secuencia_sol_luna8 import (
-    obtener_parametros, 
-    detectar_eventos, 
-    obtener_altitud, 
-    cargar_estrellas, 
-    descargar_catalogo_estrellas,
-    angular_diameter,
-    aplicar_refraction,
-    R_SUN,
-    R_MOON,
-    simular_eclipse_dual  # Aseguramos que se importa correctamente sin parámetros adicionales
-)
+# --- Constantes físicas ---
+R_SUN = 696340.0  # km
+R_MOON = 1737.4   # km
 
-# Funciones auxiliares para generar URLs (PeakFinder y ShadeMap)
-# Si el usuario no introduce manualmente azi/alt, se calcularán a partir de la posición del Sol en t_max.
-def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm",
-                         teleazi=-77.98, telealt=8.91, name="Frómista"):
-    from astropy.coordinates import AltAz
-    if (not azi or azi == "") and "t_max" in st.session_state:
-        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-        altaz_frame = AltAz(obstime=st.session_state.t_max, location=location_obj)
-        sun_pos = get_sun(st.session_state.t_max).transform_to(altaz_frame)
-        azi = f"{sun_pos.az.deg:.2f}"
-    if (not alt or alt == "") and "t_max" in st.session_state:
-        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-        altaz_frame = AltAz(obstime=st.session_state.t_max, location=location_obj)
-        sun_pos = get_sun(st.session_state.t_max).transform_to(altaz_frame)
-        alt = f"{sun_pos.alt.deg:.2f}"
-    date_str = eclipse_time.iso.split('.')[0].replace(" ", "T") + "Z"
+# --- Lista de capitales de provincia en España ---
+capitales = {
+    "Alcalá de Henares": (40.48198, -3.36354),
+    "Bilbao": (43.26300, -2.93400),
+    "Burgos": (42.34399, -3.69691),
+    "Castellón de la Plana": (39.98641, -0.03688),
+    "Cuenca": (40.07039, -2.13742),
+    "Gijón": (43.53570, -5.66150),
+    "Guadalajara": (40.63333, -3.16667),
+    "León": (42.59873, -5.56710),
+    "Lleida": (41.61759,  0.62001),
+    "Logroño": (42.46645, -2.44566),
+    "Oviedo": (43.36030, -5.84480),
+    "Palma": (39.56960,  2.65020),
+    "Santander": (43.46298, -3.80475),
+    "Valencia": (39.46990, -0.37630),
+    "Valladolid": (41.65280, -4.72450),
+    "Zaragoza": (41.64880, -0.88910)
+}
+
+# --- Funciones auxiliares ---
+@st.cache_data(ttl=86400)
+def obtener_altitud(lat, lng):
+    """Devuelve la altitud en metros usando la API Open-Meteo."""
+    url = f"https://api.open-meteo.com/v1/elevation?latitude={lat}&longitude={lng}"
+    try:
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if "elevation" in data and isinstance(data["elevation"], list):
+            return data["elevation"][0]
+    except:
+        pass
+    return None
+
+@st.cache_data(ttl=86400)
+def geocode_lugar(nombre):
+    geolocator = Nominatim(user_agent="eclipse_app")
+    try:
+        loc = geolocator.geocode(nombre, language="es", timeout=10)
+        if loc:
+            return loc.latitude, loc.longitude, loc.address
+    except:
+        pass
+    return None, None, None
+
+@st.cache_data(ttl=86400)
+def reverse_geocode(lat, lng):
+    geolocator = Nominatim(user_agent="eclipse_app")
+    try:
+        loc = geolocator.reverse((lat, lng), language="es", timeout=10)
+        return loc.address if loc else "Desconocido"
+    except:
+        return "Error"
+
+@st.cache_data(ttl=86400)
+def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=6.5):
+    """Descarga catálogo de estrellas cercano al Sol con Astroquery Vizier."""
+    Vizier.ROW_LIMIT = -1
+    center = SkyCoord(ra=center_coord.ra, dec=center_coord.dec, unit='deg', frame='icrs')
+    viz = Vizier(columns=["RA_ICRS","DE_ICRS","Gmag"], row_limit=-1)
+    try:
+        res = viz.query_region(center, radius=radius*u.deg, catalog="I/355/gaiadr3")
+        if res:
+            df = res[0].to_pandas()
+            df = df[df.Gmag < mag_limite]
+            return df
+    except:
+        pass
+    return None
+
+# --- URLs externas: PeakFinder y ShadeMap ---
+
+def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm"):
+    """Genera URL para PeakFinder con la posición y orientación dadas."""
+    date_str = eclipse_time.iso.replace(' ', 'T') + 'Z'
     base_url = "https://www.peakfinder.com/es/?"
-    params = f"lat={lat}&lng={lon}&ele={int(elev)}&zoom=5"
-    if azi is not None and azi != "":
+    params = f"lat={lat}&lng={lon}&ele={int(elev)}"
+    if azi is not None:
         params += f"&azi={azi}"
-    if alt is not None and alt != "":
+    if alt is not None:
         params += f"&alt={alt}"
-    params += f"&fov={fov}&date={date_str}&cfg={cfg}&teleazi={teleazi}&telealt={telealt}&name={name}"
+    params += f"&fov={fov}&date={date_str}&cfg={cfg}"
     return base_url + params
 
-# Función auxiliar para generar la URL de ShadeMap
+
 def get_shademap_url(lat, lon, elev, eclipse_time, zoom=13, bearing=0, pitch=0, margin=0):
+    """Genera URL para ShadeMap con la posición y timestamp dados."""
     base_url = "https://shademap.app/@"
     lat_str = f"{lat:.3f}"
     lon_str = f"{lon:.3f}"
-    if eclipse_time is not None:
-        ts_ms = int(eclipse_time.unix * 1000)
-    else:
-        from time import time as current_time
-        ts_ms = int(current_time() * 1000)
-    url = f"{base_url}{lat_str},{lon_str},{zoom}z,{ts_ms}t,{bearing}b,{pitch}p,{margin}m"
-    return url
+    ts_ms = int(eclipse_time.unix * 1000)
+    return f"{base_url}{lat_str},{lon_str},{zoom}z,{ts_ms}t,{bearing}b,{pitch}p,{margin}m"
 
-# Función para la simulación del eclipse (sin refracción) adaptada para Streamlit.
-def simular_eclipse_streamlit(tiempos, location, horizon_data=None, LIMITE=2.5, anim_interval=200):
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.set_xlim(-LIMITE, LIMITE)
-    ax.set_ylim(-LIMITE, LIMITE)
-    ax.set_xlabel("Diferencia en Acimut (°)")
-    ax.set_ylabel("Diferencia en Altitud (°)")
-    ax.set_title("Simulación del Eclipse Solar (Sin refracción)")
+# Funciones de simulación y eventos (importar de secuencia)
+def angular_diameter(radius, distance):
+    return np.degrees(2 * np.arctan(radius / distance))
+
+
+def aplicar_refraction(alt, az, distance, RefInst, lmbda=550e-9):
+    z = np.deg2rad(90 - alt)
+    shift = RefInst.get_AngularShift(z, lmbda)
+    lateral = RefInst.get_LateralShift(z, lmbda)
+    return alt + np.degrees(shift), az + np.degrees(np.arctan(lateral/(distance*1000)))
+
+
+def obtener_parametros(t, location):
+    """Obtiene parámetros del eclipse importados del módulo externo."""
+    from secuencia_sol_luna8 import obtener_parametros as get_par
+    return get_par(t, location)
+
+
+def detectar_eventos(tiempos, params, location):
+    """Detecta eventos del eclipse importados del módulo externo."""
+    from secuencia_sol_luna8 import detectar_eventos as det_ev
+    return det_ev(tiempos, params, location)
+
+# Animaciones
+
+def _create_axes(title, limite):
+    fig, ax = plt.subplots(figsize=(6,6))
+    ax.set_xlim(-limite, limite); ax.set_ylim(-limite, limite)
+    ax.set_xlabel("Δ Azimut (°)"); ax.set_ylabel("Δ Altitud (°)")
+    ax.set_title(title)
     ax.grid(True, linestyle='--', alpha=0.5)
-    ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
-    ax.axvline(0, color='gray', linestyle='--', linewidth=0.5)
+    ax.axhline(0, color='gray', lw=0.5); ax.axvline(0, color='gray', lw=0.5)
+    sun = Circle((0,0),1, color='gold', alpha=0.6, ec='darkgoldenrod')
+    moon = Circle((0,0),0.1, color='silver', alpha=0.6, ec='dimgray')
+    ax.add_patch(sun); ax.add_patch(moon)
+    time_txt = ax.text(0.05,0.95,'', transform=ax.transAxes, va='top')
+    return fig, ax, sun, moon, time_txt
 
-    sun_patch = Circle((0, 0), radius=1, color='gold', alpha=0.6, ec='darkgoldenrod', lw=1.5)
-    ax.add_patch(sun_patch)
-    moon_patch = Circle((0, 0), radius=0.1, color='silver', alpha=0.6, ec='dimgray', lw=1.5)
-    ax.add_patch(moon_patch)
-    horizon_line, = ax.plot([], [], color='blue', linestyle='--', linewidth=1, label="Horizonte")
-    time_text = ax.text(0.05, 0.95, "", transform=ax.transAxes, fontsize=10, verticalalignment='top')
-    ax.legend(loc='upper right')
 
-    def init():
-        moon_patch.center = (0, 0)
-        time_text.set_text("")
-        horizon_line.set_data([], [])
-        return sun_patch, moon_patch, time_text, horizon_line
+def simular_eclipse_streamlit(tiempos, location, horizon=None, use_refraction=False, limite=2.5, fps=5):
+    """Genera una animación GIF de la simulación de eclipse, opcionalmente con refracción."""
+    # Selección de título según tipo
+    title = "Con refracción" if use_refraction else "Sin refracción"
+    fig, ax, sun_patch, moon_patch, txt = _create_axes(title, limite)
+    # Añadir línea de horizonte
+    horizon_line, = ax.plot([], [], color='blue', linestyle='--', linewidth=1)
+    RefInst = None
+    lmbda = None
+    if use_refraction:
+        RefInst = refraction_shift(288.15, 101325, location.height.value)
+        lmbda = 550e-9
 
-    def update(frame):
-        obstime = tiempos[frame]
-        altaz_frame = AltAz(obstime=obstime, location=location)
-        sun_coord = get_sun(obstime)
-        d_sun = sun_coord.distance.to(u.km).value
-        sol_diam = angular_diameter(R_SUN, d_sun)
-        sun_radius = sol_diam / 2.0
-        sun_patch.set_radius(sun_radius)
-        sun_patch.center = (0, 0)
-        sol = sun_coord.transform_to(altaz_frame)
-        luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
-        d_az = (luna.az - sol.az).to(u.deg).value
-        d_alt = (luna.alt - sol.alt).to(u.deg).value
-        d_x = d_az * np.cos(sol.alt.radian)
-        d_y = d_alt
-        d_luna = luna.distance.to(u.km).value
-        luna_diam = angular_diameter(R_MOON, d_luna)
-        moon_radius = luna_diam / 2.0
-        moon_patch.center = (d_x, d_y)
-        moon_patch.set_radius(moon_radius)
-        time_text.set_text(f"UT: {obstime.iso}")
-        if horizon_data is not None:
+    def update(i):
+        t = tiempos[i]
+        altaz = AltAz(obstime=t, location=location)
+        sol = get_sun(t).transform_to(altaz)
+        lun = get_body('moon', t, location=location).transform_to(altaz)
+        d_sun = get_sun(t).distance.to(u.km).value
+        d_lun = get_body('moon', t, location=location).distance.to(u.km).value
+        r_sol = angular_diameter(R_SUN, d_sun)/2
+        r_lun = angular_diameter(R_MOON, d_lun)/2
+        sun_patch.set_radius(r_sol)
+        # Cálculo posiciones con/sin refracción
+        if use_refraction and RefInst:
+            alt_s, az_s = aplicar_refraction(sol.alt.deg, sol.az.deg, d_sun, RefInst, lmbda)
+            alt_m, az_m = aplicar_refraction(lun.alt.deg, lun.az.deg, d_lun, RefInst, lmbda)
+        else:
+            alt_s, az_s = sol.alt.deg, sol.az.deg
+            alt_m, az_m = lun.alt.deg, lun.az.deg
+        dx = (az_m - az_s)*np.cos(np.deg2rad(alt_s))
+        dy = alt_m - alt_s
+        moon_patch.center = (dx, dy)
+        moon_patch.set_radius(r_lun)
+        txt.set_text(t.iso)
+        # Dibujar horizonte
+        if horizon is not None:
             pts = []
-            sol_az = sol.az.to(u.deg).value
-            sol_alt = sol.alt.to(u.deg).value
-            for point in horizon_data:
-                az_h, alt_h = point
-                d_az_point = ((az_h - sol_az + 180) % 360) - 180
-                x_pt = d_az_point * np.cos(sol.alt.radian)
-                y_pt = alt_h - sol_alt
-                pts.append([x_pt, y_pt])
+            sol_az = az_s
+            sol_alt = alt_s
+            for az_h, alt_h in horizon:
+                d_azp = ((az_h - sol_az + 180) % 360) - 180
+                x_p = d_azp * np.cos(np.deg2rad(sol_alt))
+                y_p = alt_h - sol_alt
+                pts.append([x_p, y_p])
             pts = np.array(pts)
             horizon_line.set_data(pts[:,0], pts[:,1])
         else:
-            horizon_d_y = 0 - sol.alt.to(u.deg).value
-            if -LIMITE <= horizon_d_y <= LIMITE:
-                x_vals = np.array([-LIMITE, LIMITE])
-                y_vals = np.array([horizon_d_y, horizon_d_y])
+            # horizonte plano al nivel de 0 altitud
+            y0 = - sol.alt.deg
+            if -limite <= y0 <= limite:
+                x_vals = np.array([-limite, limite])
+                y_vals = np.array([y0, y0])
                 horizon_line.set_data(x_vals, y_vals)
             else:
                 horizon_line.set_data([], [])
-        return sun_patch, moon_patch, time_text, horizon_line
+        return sun_patch, moon_patch, txt, horizon_line
 
-    ani = animation.FuncAnimation(
-        fig, update, frames=len(tiempos), init_func=init,
-        blit=True, interval=anim_interval, repeat=True
-    )
+    ani = animation.FuncAnimation(fig, update, frames=len(tiempos), blit=True)
+    tmp = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
+    ani.save(tmp.name, writer=animation.PillowWriter(fps=fps))
     plt.close(fig)
-    # Guardar la animación como GIF usando PillowWriter
-    writer = animation.PillowWriter(fps=5)
-    gif_path = "/tmp/eclipse_sin_refraccion.gif"
-    ani.save(gif_path, writer=writer)
-    with open(gif_path, "rb") as f:
-        gif_base64 = base64.b64encode(f.read()).decode()
-    # Retorna el HTML con el GIF
-    return f'<img width="100%" src="data:image/gif;base64,{gif_base64}">'
-
-# Función para la simulación dual adaptada para Streamlit
-def simular_eclipse_dual_streamlit(tiempos, location, horizon_data=None, star_catalog_data=None, t_total_range=None, LIMITE=2.5, anim_interval=200):
-    from RefractionShift.refraction_shift import refraction
-    Refraction_inst = refraction(288.15, 101325, location.height.value)
-    lmbda = 550e-9
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
-    for ax in (ax1, ax2):
-        ax.set_xlim(-LIMITE, LIMITE)
-        ax.set_ylim(-LIMITE, LIMITE)
-        ax.set_xlabel("Diferencia en Acimut (°)")
-        ax.set_ylabel("Diferencia en Altitud (°)")
-        ax.grid(True, linestyle='--', alpha=0.5)
-        ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
-        ax.axvline(0, color='gray', linestyle='--', linewidth=0.5)
-    ax1.set_title("Sin refracción")
-    ax2.set_title("Con refracción")
-
-    sun_patch1 = Circle((0, 0), radius=1, color='gold', alpha=0.6, ec='darkgoldenrod', lw=1.5)
-    sun_patch2 = Circle((0, 0), radius=1, color='gold', alpha=0.6, ec='darkgoldenrod', lw=1.5)
-    ax1.add_patch(sun_patch1)
-    ax2.add_patch(sun_patch2)
-
-    moon_patch1 = Circle((0, 0), radius=0.1, color='silver', alpha=0.6, ec='dimgray', lw=1.5)
-    moon_patch2 = Circle((0, 0), radius=0.1, color='silver', alpha=0.6, ec='dimgray', lw=1.5)
-    ax1.add_patch(moon_patch1)
-    ax2.add_patch(moon_patch2)
-
-    time_text1 = ax1.text(0.05, 0.95, "", transform=ax1.transAxes, fontsize=10, verticalalignment='top')
-    time_text2 = ax2.text(0.05, 0.95, "", transform=ax2.transAxes, fontsize=10, verticalalignment='top')
-
-    def init():
-        moon_patch1.center = (0, 0)
-        moon_patch2.center = (0, 0)
-        time_text1.set_text("")
-        time_text2.set_text("")
-        return moon_patch1, moon_patch2, time_text1, time_text2
-
-    def update(frame):
-        from secuencia_sol_luna8 import aplicar_refraction, angular_diameter, R_SUN, R_MOON
-        from astropy.coordinates import get_sun, get_body, AltAz
-        import astropy.units as u
-
-        obstime = tiempos[frame]
-        altaz_frame = AltAz(obstime=obstime, location=location)
-
-        sun_coord = get_sun(obstime)
-        d_sun = sun_coord.distance.to(u.km).value
-        sol_diam = angular_diameter(R_SUN, d_sun)
-        sun_radius = sol_diam / 2.0
-        sun_patch1.set_radius(sun_radius)
-        sun_patch2.set_radius(sun_radius)
-        sol = sun_coord.transform_to(altaz_frame)
-        luna = get_body("moon", obstime, location=location).transform_to(altaz_frame)
-
-        d_az = (luna.az - sol.az).to(u.deg).value
-        d_alt = (luna.alt - sol.alt).to(u.deg).value
-        d_x = d_az * np.cos(sol.alt.radian)
-        d_y = d_alt
-        d_luna = luna.distance.to(u.km).value
-        luna_diam = angular_diameter(R_MOON, d_luna)
-        moon_radius = luna_diam / 2.0
-        moon_patch1.center = (d_x, d_y)
-        moon_patch1.set_radius(moon_radius)
-        time_text1.set_text(f"UT: {obstime.iso}")
-
-        alt_sol = sol.alt.to(u.deg).value
-        az_sol = sol.az.to(u.deg).value
-        sol_eff_alt, sol_eff_az = aplicar_refraction(alt_sol, az_sol, d_sun, Refraction_inst, lmbda)
-
-        alt_luna = luna.alt.to(u.deg).value
-        az_luna = luna.az.to(u.deg).value
-        luna_eff_alt, luna_eff_az = aplicar_refraction(alt_luna, az_luna, d_luna, Refraction_inst, lmbda)
-
-        d_az_eff = (luna_eff_az - sol_eff_az)
-        d_x_eff = d_az_eff * np.cos(np.deg2rad(sol_eff_alt))
-        d_y_eff = luna_eff_alt - sol_eff_alt
-
-        moon_patch2.center = (d_x_eff, d_y_eff)
-        moon_patch2.set_radius(moon_radius)
-        time_text2.set_text(f"UT: {obstime.iso}")
-        return moon_patch1, moon_patch2, time_text1, time_text2
-
-    ani = animation.FuncAnimation(
-        fig, update, frames=len(tiempos),
-        init_func=init, blit=True, interval=anim_interval, repeat=True
-    )
-    plt.close(fig)
-    # Generar la animación dual como GIF
-    writer = animation.PillowWriter(fps=5)
-    gif_path = "/tmp/eclipse_dual.gif"
-    ani.save(gif_path, writer=writer)
-    with open(gif_path, "rb") as f:
-        gif_base64 = base64.b64encode(f.read()).decode()
-    return f'<img width="100%" src="data:image/gif;base64,{gif_base64}">'
-
-# ----------------- Configuración de la App -----------------
-st.set_page_config(page_title="Simulador de Eclipse Solar", layout="wide")
-st.title("🌘 Simulador de Eclipse Solar")
-st.markdown(
-    "Esta app calcula los eventos de un eclipse solar (contactos, máximo, duración, etc.) "
-    "y permite generar animaciones de la simulación (sin refracción) según la fecha, hora y ubicación que selecciones. "
-    "Además, en las opciones avanzadas podrás abrir enlaces a PeakFinder y ShadeMap, "
-    "cargar un fichero con datos reales del horizonte y descargar el catálogo de estrellas para el campo de totalidad."
-)
-
-# --- Entradas Básicas: Fecha, Hora y Duración ---
-col1, col2 = st.columns(2)
-with col1:
-    fecha = st.date_input("📅 Fecha del eclipse", datetime(2026, 8, 12))
-with col2:
-    hora = st.time_input("⏰ Hora inicial (UT)", datetime.strptime("17:30", "%H:%M").time())
-# Duración de simulación por defecto: 120 minutos
-duracion_min = st.slider("⏱️ Duración de simulación (minutos)", 5, 120, 120)
-
-eclipse_time = Time(datetime.combine(fecha, hora))
-
-# --- Selección de Ubicación ---
-st.markdown("### 🌍 Selección de ubicación (haz clic en el mapa)")
-if "coords" not in st.session_state:
-    st.session_state.coords = {"lat": 40.4168, "lng": -3.7038}
-
-m = folium.Map(location=[st.session_state.coords["lat"], st.session_state.coords["lng"]], zoom_start=5)
-folium.Marker(
-    [st.session_state.coords["lat"], st.session_state.coords["lng"]],
-    tooltip="Ubicación seleccionada",
-).add_to(m)
-map_data = st_folium(m, height=400, width=700)
-if map_data["last_clicked"] is not None:
-    st.session_state.coords = map_data["last_clicked"]
-
-# Opción para ingresar manualmente las coordenadas (opcional)
-if st.checkbox("¿Deseas ingresar manualmente las coordenadas de observación?"):
-    lat_manual = st.number_input("Latitud (manual)", value=st.session_state.coords.get("lat", 40.4168))
-    lon_manual = st.number_input("Longitud (manual)", value=st.session_state.coords.get("lng", -3.7038))
-    st.session_state.coords = {"lat": lat_manual, "lng": lon_manual}
-
-lat = st.session_state.coords["lat"]
-lon = st.session_state.coords["lng"]
-st.write(f"📍 Coordenadas seleccionadas: **Latitud:** {lat:.5f}°, **Longitud:** {lon:.5f}°")
-
-# --- Altitud: Obtenerla automáticamente ---
-auto_elev = obtener_altitud(lat, lon)
-if auto_elev is not None:
-    st.session_state.elev = auto_elev
-    st.success(f"Altitud obtenida automáticamente: {auto_elev} metros")
-else:
-    st.session_state.elev = 667
-    st.warning("No se pudo obtener la altitud automáticamente. Se usará 667 metros por defecto.")
-elev = st.number_input("🗻 Elevación del terreno (m)", value=st.session_state.elev)
-
-# --- Opciones Avanzadas ---
-with st.expander("🔧 Opciones Avanzadas"):
-    st.markdown("#### Horizonte Artificial (PeakFinder)")
-    # Si el usuario no ingresa manualmente, se usarán los valores calculados del Sol en t_max (si existen)
-    azi_input = st.text_input("Azimut (°) para horizonte artificial", value="")
-    alt_input = st.text_input("Altitud (°) para horizonte artificial", value="")
-    if st.button("Generar enlace a PeakFinder"):
-        peak_url = get_peakfinder_url(lat, lon, elev, eclipse_time, azi_input, alt_input)
-        st.markdown(f"[Abrir Horizonte Artificial en PeakFinder]({peak_url})", unsafe_allow_html=True)
-    
-    st.markdown("---")
-    st.markdown("#### ShadeMap")
-    zoom_input = st.number_input("Zoom para ShadeMap", value=13, step=1, min_value=1)
-    bearing_input = st.number_input("Bearing para ShadeMap", value=0, step=1)
-    pitch_input = st.number_input("Pitch para ShadeMap", value=0, step=1)
-    margin_input = st.number_input("Margin para ShadeMap", value=0, step=1)
-    if st.button("Generar enlace a ShadeMap"):
-        eclipse_time_shade = st.session_state.t_max if "t_max" in st.session_state else eclipse_time
-        shade_url = get_shademap_url(lat, lon, elev, eclipse_time_shade, zoom=zoom_input, bearing=bearing_input, pitch=pitch_input, margin=margin_input)
-        st.markdown(f"[Abrir ShadeMap]({shade_url})", unsafe_allow_html=True)
-    
-    st.markdown("---")
-    st.markdown("#### Cargar fichero con datos reales del horizonte")
-    uploaded_horizonte = st.file_uploader("Subir fichero (dos columnas: az alt, con cabecera)", type=["txt", "csv"])
-    horizon_data = None
-    if uploaded_horizonte is not None:
-        try:
-            horizon_data = np.loadtxt(uploaded_horizonte, skiprows=1)
-            st.success("Fichero de horizonte cargado correctamente.")
-        except Exception as e:
-            st.error("Error al cargar el fichero: " + str(e))
-    
-    st.markdown("---")
-    descargar_catalogo_flag = st.checkbox("Descargar catálogo de estrellas automáticamente (para el campo de totalidad)")
-
-# --- Recursos adicionales ---
-st.markdown("---")
-st.markdown("### Recursos adicionales")
-st.markdown("#### Mapas meteorológicos y de sombras")
-st.markdown("[Mapa meteorológico y de sombras: 12 de Agosto 2026 Eclipse](https://pmisson.users.earthengine.app/view/clouds-12-august-2026-eclipse)")
-st.markdown("[Mapa meteorológico: 2 de Agosto 2027 Eclipse](https://pmisson.users.earthengine.app/view/clouds-eclipse-2nd-of-august-2027)")
-st.markdown("[Mapa meteorológico: 26 de Enero 2028 Eclipse](https://pmisson.users.earthengine.app/view/clouds-eclipse-26th-of-january-2028)")
-
-
-st.markdown("#### Más información sobre eclipses")
-st.markdown("[Eclipseo.es](https://eclipseo.es)")
-# --- Botón para ejecutar el cálculo de eventos del eclipse ---
-if st.button("🔍 Calcular eventos del eclipse"):
-    st.info("Calculando eventos del eclipse...")
-    try:
-        t_ini = Time(datetime.combine(fecha, hora))
-        dt = 10  # segundos entre pasos
-        pasos = int((duracion_min * 60) / dt) + 1
-        tiempos = t_ini + TimeDelta(np.arange(0, pasos * dt, dt), format='sec')
-        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-        params_array = [obtener_parametros(t, location_obj) for t in tiempos]
-        eventos = detectar_eventos(tiempos, params_array, location_obj)
-        
-        if "Máximo Eclipse" in eventos:
-            st.session_state.t_max = eventos["Máximo Eclipse"]["time"]
-        
-        st.success("🎯 Eventos del eclipse calculados:")
-        for nombre, evento in eventos.items():
-            tiempo_evento = evento.get("time", "N/A")
-            alt_sol = evento.get("alt_sol", None)
-            az_sol = evento.get("az_sol", None)
-            mag = evento.get("mag", None)
-            if alt_sol is not None:
-                st.markdown(f"**🟢 {nombre}** — "
-                            f"🕒 **UT:** {tiempo_evento.iso}, "
-                            f"🔼 Alt: {alt_sol:.2f}°, "
-                            f"➡️ Az: {az_sol:.2f}°, "
-                            f"🌑 Magnitud: {mag:.3f}")
-            else:
-                st.markdown(f"**🟢 {nombre}** — 🕒 **UT:** {tiempo_evento.iso}")
-        
-        if descargar_catalogo_flag:
-            if "Segundo Contacto" in eventos and "Tercer Contacto" in eventos:
-                t_max_cat = eventos["Máximo Eclipse"]["time"]
-                sun_coord = get_sun(t_max_cat)
-                star_catalog = descargar_catalogo_estrellas(sun_coord, radius=2.5, mag_limite=10)
-                if star_catalog is not None and len(star_catalog) > 0:
-                    st.success("Catálogo de estrellas descargado.")
-                    import pandas as pd
-                    df_stars = pd.DataFrame(star_catalog, columns=["RA_ICRS", "DE_ICIS", "Gmag"])
-                    csv_data = df_stars.to_csv(index=False).encode('utf-8')
-                    st.download_button("Descargar Catálogo de Estrellas (CSV)", data=csv_data, file_name="catalogo_estrellas.csv", mime="text/csv")
-                else:
-                    st.warning("No se encontró catálogo de estrellas o está vacío.")
-            else:
-                st.warning("No se detectó eclipse total; el catálogo de estrellas no se descargará.")
-    except Exception as e:
-        st.error(f"❌ Error durante el cálculo: {e}")
-
-# --- Botón para mostrar la simulación (sin refracción) ---
-if st.button("▶️ Mostrar simulación del eclipse (sin refracción)"):
-    st.info("Generando simulación...")
-    try:
-        t_ini_sim = Time(datetime.combine(fecha, hora))
-        dt_sim = 10
-        pasos_sim = int((duracion_min * 60) / dt_sim) + 1
-        tiempos_sim = t_ini_sim + TimeDelta(np.arange(0, pasos_sim * dt_sim, dt_sim), format='sec')
-        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-        # Ahora simular_eclipse_streamlit retorna HTML con el GIF generado
-        gif_html = simular_eclipse_streamlit(tiempos_sim, location_obj, horizon_data=horizon_data, LIMITE=2.5, anim_interval=200)
-        st.markdown(gif_html, unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"❌ Error en la simulación: {e}")
-        
-# --- Simulación dual ---
-# --- Botón para mostrar la simulación del eclipse (dual: con y sin refracción) ---
-if st.button("▶️ Mostrar simulación del eclipse (dual: con(básico) y sin refracción)[Tarda mucho, no simular más de 5 min]"):
-    st.info("Generando simulación dual...")
-    try:
-        t_ini_sim = Time(datetime.combine(fecha, hora))
-        dt_sim = 10
-        pasos_sim = int((duracion_min * 60) / dt_sim) + 1
-        tiempos_sim = t_ini_sim + TimeDelta(np.arange(0, pasos_sim * dt_sim, dt_sim), format='sec')
-        location_obj = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elev*u.m)
-
-        from RefractionShift.refraction_shift import refraction
-        Refraction_inst = refraction(288.15, 101325, location_obj.height.value)
+    return tmp.name
+    """Genera una animación GIF de la simulación de eclipse, opcionalmente con refracción."""
+    # Selección de título según tipo
+    title = "Con refracción" if use_refraction else "Sin refracción"
+    fig, ax, sun_patch, moon_patch, txt = _create_axes(title, limite)
+    RefInst = None
+    lmbda = None
+    if use_refraction:
+        RefInst = refraction_shift(288.15, 101325, location.height.value)
         lmbda = 550e-9
 
-        progress_bar = st.progress(0)
+    def update(i):
+        t = tiempos[i]
+        altaz = AltAz(obstime=t, location=location)
+        sol = get_sun(t).transform_to(altaz)
+        lun = get_body('moon', t, location=location).transform_to(altaz)
+        d_sun = get_sun(t).distance.to(u.km).value
+        d_lun = get_body('moon', t, location=location).distance.to(u.km).value
+        r_sol = angular_diameter(R_SUN, d_sun)/2
+        r_lun = angular_diameter(R_MOON, d_lun)/2
+        sun_patch.set_radius(r_sol)
+        if use_refraction and RefInst:
+            alt_s, az_s = aplicar_refraction(sol.alt.deg, sol.az.deg, d_sun, RefInst, lmbda)
+            alt_m, az_m = aplicar_refraction(lun.alt.deg, lun.az.deg, d_lun, RefInst, lmbda)
+        else:
+            alt_s, az_s = sol.alt.deg, sol.az.deg
+            alt_m, az_m = lun.alt.deg, lun.az.deg
+        dx = (az_m - az_s)*np.cos(np.deg2rad(alt_s))
+        dy = alt_m - alt_s
+        moon_patch.center=(dx, dy); moon_patch.set_radius(r_lun)
+        txt.set_text(t.iso)
+        return sun_patch, moon_patch, txt
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
-        for ax in (ax1, ax2):
-            ax.set_xlim(-2.5, 2.5)
-            ax.set_ylim(-2.5, 2.5)
-            ax.set_xlabel("Diferencia en Acimut (°)")
-            ax.set_ylabel("Diferencia en Altitud (°)")
-            ax.grid(True, linestyle='--', alpha=0.5)
-            ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
-            ax.axvline(0, color='gray', linestyle='--', linewidth=0.5)
-        ax1.set_title("Sin refracción")
-        ax2.set_title("Con refracción")
+        t = tiempos[i]
+        altaz = AltAz(obstime=t, location=location)
+        sol = get_sun(t).transform_to(altaz)
+        lun = get_body('moon', t, location=location).transform_to(altaz)
+        d_sun = get_sun(t).distance.to(u.km).value
+        d_lun = get_body('moon', t, location=location).distance.to(u.km).value
+        r_sol = angular_diameter(R_SUN, d_sun)/2
+        r_lun = angular_diameter(R_MOON, d_lun)/2
+        sun_patch.set_radius(r_sol)
+        if refraction and RefInst:
+            alt_s, az_s = aplicar_refraction(sol.alt.deg, sol.az.deg, d_sun, RefInst, lmbda)
+            alt_m, az_m = aplicar_refraction(lun.alt.deg, lun.az.deg, d_lun, RefInst, lmbda)
+        else:
+            alt_s, az_s = sol.alt.deg, sol.az.deg
+            alt_m, az_m = lun.alt.deg, lun.az.deg
+        dx = (az_m - az_s)*np.cos(np.deg2rad(alt_s))
+        dy = alt_m - alt_s
+        moon_patch.center=(dx, dy); moon_patch.set_radius(r_lun)
+        txt.set_text(t.iso)
+        return sun_patch, moon_patch, txt
 
-        sun_patch1 = Circle((0, 0), radius=1, color='gold', alpha=0.6, ec='darkgoldenrod', lw=1.5)
-        sun_patch2 = Circle((0, 0), radius=1, color='gold', alpha=0.6, ec='darkgoldenrod', lw=1.5)
-        ax1.add_patch(sun_patch1)
-        ax2.add_patch(sun_patch2)
+    ani = animation.FuncAnimation(fig, update, frames=len(tiempos), blit=True)
+    tmp = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
+    ani.save(tmp.name, writer=animation.PillowWriter(fps=fps))
+    plt.close(fig)
+    return tmp.name
 
-        moon_patch1 = Circle((0, 0), radius=0.1, color='silver', alpha=0.6, ec='dimgray', lw=1.5)
-        moon_patch2 = Circle((0, 0), radius=0.1, color='silver', alpha=0.6, ec='dimgray', lw=1.5)
-        ax1.add_patch(moon_patch1)
-        ax2.add_patch(moon_patch2)
+# --- Configuración de la App ---
+st.set_page_config(page_title="Simulador Eclipse Solar", layout="wide")
+st.title("🌘 Simulador de Eclipse Solar")
+st.markdown(
+    "App para calcular eventos de un eclipse, generar animaciones y obtener catálogos de estrellas."
+)
 
-        horizon_line1, = ax1.plot([], [], color='blue', linestyle='--', linewidth=1)
-        horizon_line2, = ax2.plot([], [], color='blue', linestyle='--', linewidth=1)
+# -- Sidebar: Configuración básica --
+st.sidebar.header("📅 Fecha y hora")
+fecha = st.sidebar.date_input("Fecha del eclipse", datetime(2026,8,12))
+hora = st.sidebar.time_input("Hora inicial (UT)", datetime.strptime("17:30","%H:%M").time())
+dur_min = st.sidebar.slider("Duración (min)", 5, 240, 120)
+eclipse_start = Time(datetime.combine(fecha, hora))
 
-        time_text1 = ax1.text(0.05, 0.95, "", transform=ax1.transAxes, fontsize=10, verticalalignment='top')
-        time_text2 = ax2.text(0.05, 0.95, "", transform=ax2.transAxes, fontsize=10, verticalalignment='top')
+# -- Sidebar: Ubicación --
+st.sidebar.header("📍 Ubicación")
+if 'coords' not in st.session_state:
+    st.session_state.coords = {'lat':40.4168,'lng':-3.7038}
+metodo = st.sidebar.radio("Indicar ubicación via:", ("Municipio","Manual","Capitales"))
+if metodo == "Municipio":
+    lugar = st.sidebar.text_input("Municipio o lugar", "Madrid")
+    if st.sidebar.button("Buscar"):
+        lat, lng, addr = geocode_lugar(lugar)
+        if lat and lng:
+            st.session_state.coords = {'lat':lat,'lng':lng}
+            st.sidebar.success(addr)
+        else:
+            st.sidebar.error("No encontrado")
+elif metodo == "Manual":
+    st.session_state.coords['lat'] = st.sidebar.number_input("Latitud", value=st.session_state.coords['lat'], format="%.6f")
+    st.session_state.coords['lng'] = st.sidebar.number_input("Longitud", value=st.session_state.coords['lng'], format="%.6f")
+else:
+    ciudad = st.sidebar.selectbox("Capital española", list(capitales.keys()))
+    lat, lng = capitales[ciudad]
+    st.session_state.coords = {'lat':lat,'lng':lng}
+    st.sidebar.write(reverse_geocode(lat,lng))
 
-        def init():
-            moon_patch1.center = (0, 0)
-            moon_patch2.center = (0, 0)
-            time_text1.set_text("")
-            time_text2.set_text("")
-            horizon_line1.set_data([], [])
-            horizon_line2.set_data([], [])
-            return moon_patch1, moon_patch2, time_text1, time_text2, horizon_line1, horizon_line2
+lat = st.session_state.coords['lat']
+lng = st.session_state.coords['lng']
+st.write(f"**Coordenadas**: {lat:.5f}°, {lng:.5f}°")
 
-        def update(frame):
-            from secuencia_sol_luna8 import aplicar_refraction, angular_diameter, R_SUN, R_MOON
-            from astropy.coordinates import get_sun, get_body, AltAz
-            import astropy.units as u
+# Mapa interactivo
+# Mostrar mapa con marcador en coordenadas actuales
+e_lat, e_lng = st.session_state.coords['lat'], st.session_state.coords['lng']
+m = folium.Map(location=[e_lat, e_lng], zoom_start=6)
+folium.Marker([e_lat, e_lng], tooltip="Ubicación seleccionada").add_to(m)
+map_data = st_folium(m, width=700, height=300)
+# Actualizar solo si realmente hubo un clic diferente
+def clicked_and_changed(map_data):
+    if not map_data:
+        return False
+    clicked = map_data.get("last_clicked")
+    if not clicked:
+        return False
+    return (clicked["lat"], clicked["lng"]) != (e_lat, e_lng)
 
-            obstime = tiempos_sim[frame]
-            altaz_frame = AltAz(obstime=obstime, location=location_obj)
-            sol = get_sun(obstime).transform_to(altaz_frame)
-            luna = get_body("moon", obstime, location=location_obj).transform_to(altaz_frame)
-            d_sun = get_sun(obstime).distance.to(u.km).value
-            d_luna = luna.distance.to(u.km).value
+if clicked_and_changed(map_data):
+    new_lat = map_data["last_clicked"]["lat"]
+    new_lng = map_data["last_clicked"]["lng"]
+    st.session_state.coords = {'lat': new_lat, 'lng': new_lng}
+    st.experimental_rerun()
 
-            sol_diam = angular_diameter(R_SUN, d_sun)
-            luna_diam = angular_diameter(R_MOON, d_luna)
-            sun_radius = sol_diam / 2.0
-            moon_radius = luna_diam / 2.0
+# Altitud
+elev = obtener_altitud(lat,lng) or 0
+st.write(f"**Elevación**: {elev} m")
+elev = st.number_input("Altitud (m)", int(elev))
+location = EarthLocation(lat=lat*u.deg, lon=lng*u.deg, height=elev*u.m)
 
-            sun_patch1.set_radius(sun_radius)
-            sun_patch2.set_radius(sun_radius)
+# Horizon file
+horizon_data = None
+up = st.file_uploader("Fichero horizonte (az alt)", type=["txt","csv"])
+if up:
+    try:
+        horizon_data = np.loadtxt(up, skiprows=1)
+        st.success("Horizonte cargado")
+    except:
+        st.error("Error al cargar horizonte")
 
-            d_az = (luna.az - sol.az).to(u.deg).value
-            d_alt = (luna.alt - sol.alt).to(u.deg).value
-            d_x = d_az * np.cos(sol.alt.radian)
-            d_y = d_alt
-            moon_patch1.center = (d_x, d_y)
-            moon_patch1.set_radius(moon_radius)
-            time_text1.set_text(f"UT: {obstime.iso}")
+# Descargar catálogo
+stars_flag = st.checkbox("Descargar catálogo de estrellas (Gmag<6.5)")
 
-            alt_sol = sol.alt.to(u.deg).value
-            az_sol = sol.az.to(u.deg).value
-            sol_eff_alt, sol_eff_az = aplicar_refraction(alt_sol, az_sol, d_sun, Refraction_inst, lmbda)
+# Botones principales
+envent_df = None
+if st.button("🔍 Calcular eventos"):
+    pasos = int(dur_min*60/10)+1
+    times = eclipse_start + TimeDelta(np.arange(pasos)*10, format='sec')
+    # No cache para obtener parámetros y eventos en cada clic
+    params = [obtener_parametros(t, location) for t in times]
+    eventos = detectar_eventos(times, params, location)
+    # Mostrar eventos en orden definido
+    order = [
+        'Primer Contacto', 'Segundo Contacto', 'Máximo Eclipse',
+        'Tercer Contacto', 'Cuarto Contacto', 'Puesta de Sol'
+    ]
+    rows = []
+    for key in order:
+        if key in eventos:
+            e = eventos[key]
+            row = {'Evento': key, 'UT': e['time'].iso}
+            if 'alt_sol' in e:
+                row.update({'Alt': round(e['alt_sol'],2), 'Az': round(e['az_sol'],2), 'Mag': round(e['mag'],3)})
+            rows.append(row)
+    envent_df = pd.DataFrame(rows)
+    st.dataframe(envent_df)
+    # Guardar tiempo máximo para otros usos
+    if 'Máximo Eclipse' in eventos:
+        st.session_state.t_max = eventos['Máximo Eclipse']['time']
 
-            alt_luna = luna.alt.to(u.deg).value
-            az_luna = luna.az.to(u.deg).value
-            luna_eff_alt, luna_eff_az = aplicar_refraction(alt_luna, az_luna, d_luna, Refraction_inst, lmbda)
-
-            d_az_eff = (luna_eff_az - sol_eff_az)
-            d_x_eff = d_az_eff * np.cos(np.deg2rad(sol_eff_alt))
-            d_y_eff = luna_eff_alt - sol_eff_alt
-            moon_patch2.center = (d_x_eff, d_y_eff)
-            moon_patch2.set_radius(moon_radius)
-            time_text2.set_text(f"UT: {obstime.iso}")
-
-            if horizon_data is None:
-                horizon_y = 0 - sol.alt.to(u.deg).value
-                if -2.5 <= horizon_y <= 2.5:
-                    x_vals = np.array([-2.5, 2.5])
-                    y_vals = np.array([horizon_y, horizon_y])
-                    horizon_line1.set_data(x_vals, y_vals)
-                else:
-                    horizon_line1.set_data([], [])
-
-                horizon_y_eff = 0 - sol_eff_alt
-                if -2.5 <= horizon_y_eff <= 2.5:
-                    x_vals = np.array([-2.5, 2.5])
-                    y_vals = np.array([horizon_y_eff, horizon_y_eff])
-                    horizon_line2.set_data(x_vals, y_vals)
-                else:
-                    horizon_line2.set_data([], [])
-            else:
-                pts = [( ((az_h - sol.az.deg + 180) % 360 - 180) * np.cos(sol.alt.radian), alt_h - sol.alt.deg)
-                       for az_h, alt_h in horizon_data]
-                pts = np.array(pts)
-                horizon_line1.set_data(pts[:, 0], pts[:, 1])
-
-                pts2 = [( ((az_h - sol_eff_az + 180) % 360 - 180) * np.cos(np.deg2rad(sol_eff_alt)), alt_h - sol_eff_alt)
-                        for az_h, alt_h in horizon_data]
-                pts2 = np.array(pts2)
-                horizon_line2.set_data(pts2[:, 0], pts2[:, 1])
-
-            progress_bar.progress((frame + 1) / len(tiempos_sim))
-            return moon_patch1, moon_patch2, time_text1, time_text2, horizon_line1, horizon_line2
-
-        ani = animation.FuncAnimation(
-            fig, update, frames=len(tiempos_sim),
-            init_func=init, blit=True, interval=200, repeat=True
+# Descargar catálogo si se solicita
+if stars_flag and 't_max' in st.session_state:
+    df_cat = descargar_catalogo_estrellas(get_sun(st.session_state.t_max))
+    if df_cat is not None and not df_cat.empty:
+        st.download_button(
+            "Descargar CSV catálogo estrellas",
+            df_cat.to_csv(index=False),
+            file_name="catalogo_estrellas.csv",
+            mime="text/csv"
         )
-        plt.close(fig)
-        # Guardar la animación dual como GIF
-        writer = animation.PillowWriter(fps=5)
-        gif_path = "/tmp/eclipse_dual.gif"
-        ani.save(gif_path, writer=writer)
-        progress_bar.empty()
-        with open(gif_path, "rb") as f:
-            gif_base64 = base64.b64encode(f.read()).decode()
-            gif_html = f'''
-            <img width="100%" src="data:image/gif;base64,{gif_base64}">
-            '''
-            st.markdown(gif_html, unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"❌ Error en la simulación dual: {e}")
+    else:
+        st.warning("No se encontraron estrellas en el catálogo.")
 
-# --- Agradecimientos ---
+# Simulación sin refracción
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("▶️ Simulación sin refracción"):
+        pasos = int(dur_min*60/10)+1
+        times = eclipse_start + TimeDelta(np.arange(pasos)*10, format='sec')
+        gif_path = simular_eclipse_streamlit(
+            times,
+            location,
+            horizon=horizon_data,
+            use_refraction=False
+        )
+        st.image(gif_path, use_container_width=True)
+
+# Simulación con refracción (aviso)
+st.warning(
+    "La simulación con refracción completa tarda mucho y está disponible para cálculo local en https://github.com/pmisson/pyeclipsesimulator"
+)
+
+
+
+# Enlaces externos: PeakFinder y ShadeMap
+st.markdown("---")
+
+# Generar URLs base
+base_t = st.session_state.get('t_max', eclipse_start)
+url_pf = get_peakfinder_url(lat, lng, elev, base_t)
+url_sm = get_shademap_url(lat, lng, elev, base_t)
+
+# Botones HTML que abren nueva pestaña
+st.sidebar.markdown(
+    f'<a href="{url_pf}" target="_blank"><button style="width:100%;padding:8px">▶️ Abrir PeakFinder</button></a>',
+    unsafe_allow_html=True
+)
+st.sidebar.markdown(
+    f'<a href="{url_sm}" target="_blank"><button style="width:100%;padding:8px">▶️ Abrir ShadeMap</button></a>',
+    unsafe_allow_html=True
+)
+
+# Agradecimientos y logos
 st.markdown("---")
 st.markdown("### Agradecimientos")
-st.markdown("Esta aplicación se ha desarrollado gracias al apoyo de:")
-st.markdown("- **Beca UNA4CAREER UCM.es** ([UNA4CAREER](https://www.una4career.eu/) | [GUAIX UCM](https://guaix.fis.ucm.es/))")
-st.markdown("- **Beca EMERGIA**: Este trabajo ha sido financiado por la ayuda EMERGIA20_DGP_EMEC_2023_00431, concedida por la Consejería de Universidad, Investigación e Innovación de la Junta de Andalucía, y se lleva a cabo en el [Instituto de Astrofísica de Andalucía-CSIC](https://www.iaa.csic.es/).")
-st.markdown("This project has received funding from the European Union’s Horizon 2020 Research and Innovation Programme under the Marie Sklodowska-Curie grant agreement No. 847635.")
-
-# Mostrar logos asociados en 4 columnas
-st.markdown("#### Logos asociados")
+st.markdown(
+    "Esta aplicación se ha desarrollado gracias al apoyo de:"
+)
+st.markdown(
+    "- **Beca UNA4CAREER UCM.es** ([UNA4CAREER](https://www.una4career.eu/) | [GUAIX UCM](https://guaix.fis.ucm.es/))"
+)
+st.markdown(
+    "- **Beca EMERGIA**: Financiado por EMERGIA20_DGP_EMEC_2023_00431, Consejería de Universidad, Investigación e Innovación de la Junta de Andalucía, en el [IAA-CSIC](https://www.iaa.csic.es/)."
+)
+st.markdown(
+    "- Financiado por el Programa de Investigación e Innovación Horizonte 2020 de la Unión Europea, Marie Sklodowska-Curie grant No. 847635."
+)
 col1, col2, col3, col4 = st.columns(4)
-col1.image(
-    "https://www.juntadeandalucia.es/sites/default/files/2023-02/normal_1.jpg", 
-    caption="Junta de Andalucía", 
-    width=150
-)
-col2.image(
-    "https://www.ucm.es/data/cont/docs/3-2016-07-21-Marca%20UCM%20logo%20negro.png", 
-    caption="UCM", 
-    width=150
-)
-col3.image(
-    "https://somma.es/wp-content/uploads/2022/04/IAA-CSIC.png", 
-    caption="IAA-CSIC", 
-    width=150
-)
-col4.image(
-    "https://www.uib.no/sites/w3.uib.no/files/styles/content_main/public/media/marie_curie_logo.png?itok=zR0htrxL", 
-    caption="Marie Curie", 
-    width=200
-)
+col1.image("https://www.juntadeandalucia.es/sites/default/files/2023-02/normal_1.jpg", caption="Junta de Andalucía", width=100)
+col2.image("https://www.ucm.es/data/cont/docs/3-2016-07-21-Marca%20UCM%20logo%20negro.png", caption="UCM", width=100)
+col3.image("https://somma.es/wp-content/uploads/2022/04/IAA-CSIC.png", caption="IAA-CSIC", width=100)
+col4.image("https://www.uib.no/sites/w3.uib.no/files/styles/content_main/public/media/marie_curie_logo.png?itok=zR0htrxL", caption="Marie Curie", width=100)
+
+
