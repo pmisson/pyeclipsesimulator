@@ -109,7 +109,6 @@ def obtener_altitud(lat, lng):
         pass
     return None
 
-@st.cache_data(ttl=86400)
 def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=6.5):
     Vizier.ROW_LIMIT = -1
     from astropy.coordinates import SkyCoord
