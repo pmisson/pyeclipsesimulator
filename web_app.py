@@ -344,7 +344,8 @@ if clicked_and_changed(map_data):
     new_lat = map_data["last_clicked"]["lat"]
     new_lng = map_data["last_clicked"]["lng"]
     st.session_state.coords = {'lat': new_lat, 'lng': new_lng}
-    st.experimental_rerun()
+    # El rerun automático con experimental_rerun se ha eliminado para evitar errores
+
 
 # Altitud
 elev = obtener_altitud(lat,lng) or 0
@@ -464,5 +465,7 @@ col1.image("https://www.juntadeandalucia.es/sites/default/files/2023-02/normal_1
 col2.image("https://www.ucm.es/data/cont/docs/3-2016-07-21-Marca%20UCM%20logo%20negro.png", caption="UCM", width=100)
 col3.image("https://somma.es/wp-content/uploads/2022/04/IAA-CSIC.png", caption="IAA-CSIC", width=100)
 col4.image("https://www.uib.no/sites/w3.uib.no/files/styles/content_main/public/media/marie_curie_logo.png?itok=zR0htrxL", caption="Marie Curie", width=100)
+
+
 
 
