@@ -131,7 +131,7 @@ def geocode_lugar(nombre):
 
 # URLs externas
 
-def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm"):
+def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=282, alt=None, fov=110, cfg="sm"):
     date_str = eclipse_time.iso.replace(' ', 'T') + 'Z'
     base = "https://www.peakfinder.com/es/?"
     params = f"lat={lat}&lng={lon}&ele={int(elev)}&fov={fov}&date={date_str}&cfg={cfg}"
