@@ -422,10 +422,10 @@ st.warning(
 
 # Enlaces externos: PeakFinder y ShadeMap
 st.markdown("---")
-
+azi=282
 # Generar URLs base
 base_t = st.session_state.get('t_max', eclipse_start)
-url_pf = get_peakfinder_url(lat, lng, elev, base_t)
+url_pf = get_peakfinder_url(lat, lng, elev, base_t,azi)
 url_sm = get_shademap_url(lat, lng, elev, base_t)
 
 # Botones HTML que abren nueva pestaña
