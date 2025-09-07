@@ -134,7 +134,7 @@ def geocode_lugar(nombre):
 def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=282, alt=None, fov=110, cfg="sm"):
     date_str = eclipse_time.iso.replace(' ', 'T') + 'Z'
     base = "https://www.peakfinder.com/es/?"
-    params = f"lat={lat}&lng={lon}&ele={int(elev)}&fov={fov}&date={date_str}&cfg={cfg}"
+    params = f"lat={lat}&lng={lon}&ele={int(elev)}&azi={azi}&fov={fov}&date={date_str}&cfg={cfg}"
     if azi: params += f"&azi={azi}"
     if alt: params += f"&alt={alt}"
     return base + params
