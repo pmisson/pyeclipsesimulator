@@ -102,7 +102,7 @@ def descargar_catalogo_estrellas(center_coord, radius=2.5, mag_limite=6.5):
 
 # --- URLs externas: PeakFinder y ShadeMap ---
 
-def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=None, alt=None, fov=110, cfg="sm"):
+def get_peakfinder_url(lat, lon, elev, eclipse_time, azi=282, alt=None, fov=110, cfg="sm"):
     """Genera URL para PeakFinder con la posición y orientación dadas."""
     date_str = eclipse_time.iso.replace(' ', 'T') + 'Z'
     base_url = "https://www.peakfinder.com/es/?"
